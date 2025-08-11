@@ -1,13 +1,14 @@
-import torch
-import numpy as np
-from typing import List
 import os
 from pathlib import Path
+from typing import List
+
+import numpy as np
+import torch
 
 
 def get_layer_names(model: torch.nn.Module, types: List):
     """
-    Retrieves the layer names of all layers that belong to a torch.nn.Module type defined 
+    Retrieves the layer names of all layers that belong to a torch.nn.Module type defined
     in 'types'.
 
     Parameters
@@ -27,7 +28,9 @@ def get_layer_names(model: torch.nn.Module, types: List):
 
     for name, layer in model.named_modules():
         for layer_definition in types:
-            if isinstance(layer, layer_definition) or issubclass(layer.__class__, layer_definition):
+            if isinstance(layer, layer_definition) or issubclass(
+                layer.__class__, layer_definition
+            ):
                 if name not in layer_names:
                     layer_names.append(name)
 
@@ -45,8 +48,8 @@ def abs_norm(rel: torch.Tensor, stabilize=1e-10):
 
     return rel / (abs_sum + stabilize)
 
+
 def max_norm(rel, stabilize=1e-10):
-    
     return rel / (rel.max() + stabilize)
 
 
@@ -60,7 +63,6 @@ def get_output_shapes(model, single_sample: torch.tensor, record_layers: List[st
     output_shapes = {}
 
     def generate_hook(name):
-
         def shape_hook(module, input, output):
             output_shapes[name] = output.shape[1:]
 
@@ -80,35 +82,41 @@ def get_output_shapes(model, single_sample: torch.tensor, record_layers: List[st
 
 
 def load_maximization(path_folder, layer_name):
-
     filename = f"{layer_name}_"
 
     d_c_sorted = np.load(Path(path_folder) / Path(filename + "data.npy"), mmap_mode="r")
-    rel_c_sorted = np.load(Path(path_folder) / Path(filename + "rel.npy"), mmap_mode="r")
+    rel_c_sorted = np.load(
+        Path(path_folder) / Path(filename + "rel.npy"), mmap_mode="r"
+    )
     rf_c_sorted = np.load(Path(path_folder) / Path(filename + "rf.npy"), mmap_mode="r")
 
     return d_c_sorted, rel_c_sorted, rf_c_sorted
 
-def load_stat_targets(path_folder):
 
+def load_stat_targets(path_folder):
     targets = np.load(Path(path_folder) / Path("targets.npy")).astype(np.int)
 
     return targets
 
 
 def load_statistics(path_folder, layer_name, target):
-
     filename = f"{target}_"
 
-    d_c_sorted = np.load(Path(path_folder) / Path(layer_name) / Path(filename + "data.npy"), mmap_mode="r")
-    rel_c_sorted = np.load(Path(path_folder) / Path(layer_name) / Path(filename + "rel.npy"), mmap_mode="r")
-    rf_c_sorted = np.load(Path(path_folder) / Path(layer_name) / Path(filename + "rf.npy"), mmap_mode="r")
+    d_c_sorted = np.load(
+        Path(path_folder) / Path(layer_name) / Path(filename + "data.npy"),
+        mmap_mode="r",
+    )
+    rel_c_sorted = np.load(
+        Path(path_folder) / Path(layer_name) / Path(filename + "rel.npy"), mmap_mode="r"
+    )
+    rf_c_sorted = np.load(
+        Path(path_folder) / Path(layer_name) / Path(filename + "rf.npy"), mmap_mode="r"
+    )
 
     return d_c_sorted, rel_c_sorted, rf_c_sorted
 
 
 def load_receptive_field(path_folder, layer_name):
-
     filename = f"{layer_name}.npy"
 
     rf_array = np.load(Path(path_folder) / Path(filename), mmap_mode="r")

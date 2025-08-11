@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any, Dict, List, Tuple, Union
+
 from PIL import Image
-from typing import Any, Tuple, Dict, List, Union
 
 
 class Cache:
@@ -9,20 +10,37 @@ class Cache:
     """
 
     def __init__(self, path="cache"):
-
         self.path = Path(path)
 
-    def save(self, ref_c, layer_name, mode, r_range, composite, rf, f_name, plot_name, **kwargs) -> None:
-
+    def save(
+        self,
+        ref_c,
+        layer_name,
+        mode,
+        r_range,
+        composite,
+        rf,
+        f_name,
+        plot_name,
+        **kwargs,
+    ) -> None:
         raise NotImplementedError("'Cache' class must be implemented!")
-     
-    def load(self, concept_ids, layer_name, mode, r_range, composite, rf, f_name, plot_name, **kwargs) -> Tuple[Dict[int, Any],
-                                                                              Dict[int, Tuple[int, int]]]:
 
+    def load(
+        self,
+        concept_ids,
+        layer_name,
+        mode,
+        r_range,
+        composite,
+        rf,
+        f_name,
+        plot_name,
+        **kwargs,
+    ) -> Tuple[Dict[int, Any], Dict[int, Tuple[int, int]]]:
         raise NotImplementedError("'Cache' class must be implemented!")
 
     def extend_dict(self, ref_original, rf_addition):
-
         raise NotImplementedError("'Cache' class must be implemented!")
 
 
@@ -38,8 +56,7 @@ class ImageCache(Cache):
     """
 
     def _create_path(self, layer_name, mode, composite, rf, func_name, plot_name):
-
-        folder_name = mode + "_" + composite.__class__.__name__ 
+        folder_name = mode + "_" + composite.__class__.__name__
         if rf:
             folder_name += "_rf"
 
@@ -49,19 +66,26 @@ class ImageCache(Cache):
         return path
 
     def _save_img_list(self, img_list, id, tuple_index, r_range, path):
-
         for img, r in zip(img_list, range(*r_range)):
-
             if not isinstance(img, Image.Image):
-                raise TypeError(f"'ImageCache' can only save PIL.Image objects. \
-                    But you tried to save a {type(img)} object.")
+                raise TypeError(
+                    f"'ImageCache' can only save PIL.Image objects. \
+                    But you tried to save a {type(img)} object."
+                )
 
             img.save(path / Path(f"{id}_{tuple_index}_{r}.png"), optimize=True)
 
-
-    def save(self, ref_dict: Dict[Any, Union[Image.Image, List]],
-             layer_name, mode, r_range: Tuple[int, int],
-             composite, rf, func_name, plot_name) -> None:
+    def save(
+        self,
+        ref_dict: Dict[Any, Union[Image.Image, List]],
+        layer_name,
+        mode,
+        r_range: Tuple[int, int],
+        composite,
+        rf,
+        func_name,
+        plot_name,
+    ) -> None:
         """
         Saves PIL.Images inside 'ref_dict' in the path defined by the remaining arguments.
 
@@ -85,31 +109,35 @@ class ImageCache(Cache):
             value = ref_dict[id]
 
             if isinstance(value, Tuple):
-
                 self._save_img_list(value[0], id, 0, r_range, path)
                 self._save_img_list(value[1], id, 1, r_range, path)
 
             elif isinstance(value[0], Image.Image):
-
                 self._save_img_list(value, id, 0, r_range, path)
 
     def _load_img_list(self, id, tuple_index, r_range, path):
-        
         imgs, not_found = [], None
         for r in range(*r_range):
-        
             try:
                 img = Image.open(path / Path(f"{id}_{tuple_index}_{r}.png"))
                 imgs.append(img)
             except FileNotFoundError:
                 not_found = (r, r_range[-1])
                 break
-        
+
         return imgs, not_found
 
-    def load(self, indices: List,
-             layer_name, mode, r_range, composite, rf, func_name, plot_name) -> Tuple[Dict[Any, Any],
-                                                                           Dict[int, Tuple[int, int]]]:
+    def load(
+        self,
+        indices: List,
+        layer_name,
+        mode,
+        r_range,
+        composite,
+        rf,
+        func_name,
+        plot_name,
+    ) -> Tuple[Dict[Any, Any], Dict[int, Tuple[int, int]]]:
         """
         Loads PIL.Images with concept index 'indices' and layer 'layer_name' from the path defined by the remaining arguments.
 
@@ -129,12 +157,10 @@ class ImageCache(Cache):
         ref_c, not_found = {}, {}
 
         for id in indices:
-
             imgs_0, not_found_0 = self._load_img_list(id, 0, r_range, path)
             imgs_1, _ = self._load_img_list(id, 1, r_range, path)
 
             if imgs_0:
-
                 if imgs_1:
                     # tuple per sample exists
                     ref_c[id] = (imgs_0, imgs_1)
@@ -144,19 +170,14 @@ class ImageCache(Cache):
             if not_found_0:
                 not_found[id] = not_found_0
 
-
         return ref_c, not_found
 
-
     def extend_dict(self, ref_original, rf_addition):
-
         for key, value in rf_addition.items():
-
             if key in ref_original:
-
                 if isinstance(value, Tuple):
-                    ref_original[key][0].extend(value[0]) 
-                    ref_original[key][1].extend(value[1]) 
+                    ref_original[key][0].extend(value[0])
+                    ref_original[key][1].extend(value[1])
                 elif isinstance(value, List):
                     ref_original[key].extend(value)
                 else:

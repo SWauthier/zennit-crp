@@ -1,5 +1,6 @@
-import torch
 from typing import List
+
+import torch
 
 
 class GraphNode:
@@ -32,7 +33,6 @@ class ModelGraph:
     """
 
     def __init__(self, input_nodes):
-
         self.id_node_map = {}
         self.layer_node_map = {}
 
@@ -73,7 +73,6 @@ class ModelGraph:
         return new_connection
 
     def set_layer_names(self, layer_names: list):
-
         self.layer_names = layer_names
         for name in layer_names:
             # cache results
@@ -107,10 +106,8 @@ class ModelGraph:
             return root_node.input_layers
 
     def _recursive_search(self, node_obj):
-
         found_layers = []
         for g_node in node_obj.input_nodes:
-
             if g_node.is_layer and g_node.layer_name in self.layer_names:
                 found_layers.append(g_node.layer_name)
 
@@ -120,7 +117,6 @@ class ModelGraph:
         return found_layers
 
     def __str__(self):
-
         model_string = ""
 
         for layer in self.id_node_map.values():
@@ -136,8 +132,10 @@ class ModelGraph:
         return model_string
 
 
-def trace_model_graph(model, sample: torch.Tensor, layer_names: List[str], debug=False) -> ModelGraph:
-    """"
+def trace_model_graph(
+    model, sample: torch.Tensor, layer_names: List[str], debug=False
+) -> ModelGraph:
+    """ "
     As pytorch does not trace the model structure like tensorflow, we need to do it ourselves.
     Thus, this function generates a model graph - a summary - how all nn.Module are connected with each other.
 
@@ -220,7 +218,6 @@ def _find_next_nodes(graph, node_outputs):
     next_nodes = []
 
     for node in graph.nodes():
-
         node_inputs = [i.unique() for i in node.inputs()]
         if set(node_inputs) & set(node_outputs):
             next_nodes.append(node)
@@ -240,7 +237,6 @@ def _collect_node_inputs_and_outputs(graph):
     for node in graph.nodes():
         # "aten" nodes are torch.nn.Modules
         if "aten" in node.kind():
-
             name = node.scopeName()
 
             if name not in layer_inputs:
@@ -264,7 +260,6 @@ def _get_input_nodes(graph, layer_inputs: dict, layer_outputs: dict):
     for node in graph.nodes():
         # "aten" describes all real layers
         if "aten" in node.kind():
-
             name = node.scopeName()
 
             node_inputs = layer_inputs[name]
@@ -281,7 +276,6 @@ def _find_overlap_with_output(node_inputs: list, layer_outputs: dict):
     """
 
     for name in layer_outputs:
-
         node_outputs = layer_outputs[name]
         if set(node_inputs) & set(node_outputs):
             # if overlap, no input node
@@ -299,7 +293,11 @@ def dump_pytorch_graph(graph):
     f = "{:25} {:40}   {} -> {}"
     print(f.format("kind", "scopeName", "inputs", "outputs"))
     for node in graph.nodes():
-        print(f.format(node.kind(), node.scopeName(),
-                       [i.unique() for i in node.inputs()],
-                       [i.unique() for i in node.outputs()]
-                       ))
+        print(
+            f.format(
+                node.kind(),
+                node.scopeName(),
+                [i.unique() for i in node.inputs()],
+                [i.unique() for i in node.outputs()],
+            )
+        )
