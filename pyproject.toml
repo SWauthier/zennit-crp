@@ -1,0 +1,17 @@
+[project]
+name = "zennit-crp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Samuel Wauthier", email = "samuel_wauthier@hotmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+zennit-crp = "zennit_crp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
