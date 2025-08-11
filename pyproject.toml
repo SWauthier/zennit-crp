@@ -7,7 +7,15 @@ authors = [
     { name = "Samuel Wauthier", email = "samuel_wauthier@hotmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "matplotlib>=3.10.5",
+    "numpy>=2.3.2",
+    "pillow>=11.3.0",
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
+    "tqdm>=4.67.1",
+    "zennit>=1.0.0",
+]
 
 [project.scripts]
 zennit-crp = "zennit_crp:main"
