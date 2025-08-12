@@ -192,7 +192,7 @@ class CondAttribution:
         else:
             raise ValueError("<mask_map> must be a dictionary or callable function.")
 
-        hook.fn_list.append(mask_fn)
+        hook.masks.append(mask_fn)
 
     def __call__(
         self,
@@ -541,7 +541,7 @@ class CondAttribution:
                 )
 
                 self._reset_gradients(data_batch)
-                [hook.fn_list.clear() for hook in hook_map.values()]
+                [hook.masks.clear() for hook in hook_map.values()]
 
         [h.remove() for h in handles]
 
