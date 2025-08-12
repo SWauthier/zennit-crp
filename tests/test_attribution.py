@@ -2,8 +2,8 @@
 import torch.nn as nn
 import torch
 from zennit.composites import EpsilonPlus
-from crp.helper import get_layer_names
-from crp.attribution import CondAttribution
+from zennit_crp.helper import get_layer_names
+from zennit_crp.attribution import CondAttribution
 import pytest
 
 

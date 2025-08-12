@@ -8,9 +8,9 @@ from torchvision.datasets import FashionMNIST
 
 from zennit.composites import EpsilonPlus
 from zennit.torchvision import SequentialMergeBatchNorm
-from crp.visualization import FeatureVisualization
-from crp.attribution import CondAttribution
-from crp.concepts import ChannelConcept
+from zennit_crp.visualization import FeatureVisualization
+from zennit_crp.attribution import CondAttribution
+from zennit_crp.concepts import ChannelConcept
 import pytest
 
 
