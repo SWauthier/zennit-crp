@@ -1,57 +1,40 @@
 import functools
 import weakref
 
-from zennit.core import RemovableHandle, RemovableHandleList
+from zennit.core import Hook, RemovableHandle, RemovableHandleList
 
 
-class MaskHook:
+class MaskHook(Hook):
     """Mask hooks for adaptive gradient masking or simple modification."""
 
-    def __init__(self, fn_list):
-        self.fn_list = fn_list
+    def __init__(self, masks=None):
+        if masks is None:
+            masks = [self._default_mask]
+        self.masks = masks
+        super().__init__()
 
-    def post_forward(self, module, input, output):
-        """Register a backward-hook to the resulting tensor right after the forward."""
-        hook_ref = weakref.ref(self)
-
-        @functools.wraps(self.backward)
-        def wrapper(grad):
-            return hook_ref().backward(module, grad)
-
-        if not isinstance(output, tuple):
-            output = (output,)
-
-        if output[0].grad_fn is not None:
-            # only if gradient required
-            output[0].register_hook(wrapper)
-        return output[0] if len(output) == 1 else output
-
-    def backward(self, module, grad):
+    def backward(self, module, grad_input, grad_output):
         """Hook applied during backward-pass"""
-        for mask_fn in self.fn_list:
-            grad = mask_fn(grad)
+        for mask in self.masks:
+            grad = mask(grad_input)
 
-        return grad
+        return tuple(grad)
 
     def copy(self):
         """Return a copy of this hook.
         This is used to describe hooks of different modules by a single hook instance.
-        Copies retain the same fn_list list.
+        Copies retain the same masks.
         """
-        return self.__class__(fn_list=self.fn_list)
+        return MaskHook(masks=self.masks)
 
     def remove(self):
         """When removing hooks, remove all stored mask_fn."""
-        self.fn_list.clear()
+        self.masks.clear()
+        super().remove()
 
-    def register(self, module):
-        """Register this instance by registering the neccessary forward hook to the supplied module."""
-        return RemovableHandleList(
-            [
-                RemovableHandle(self),
-                module.register_forward_hook(self.post_forward),
-            ]
-        )
+    @staticmethod
+    def _default_mask(obj):
+        return obj
 
 
 class FeatVisHook:
