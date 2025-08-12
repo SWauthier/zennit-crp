@@ -1,5 +1,3 @@
-from typing import Dict, List
-
 import numpy as np
 import torch
 
@@ -9,21 +7,23 @@ class Concept:
     Abstract class that imlplements the core functionality for the attribution computation of concepts.
     """
 
-    def mask(self, batch_id, concept_ids, layer_name):
+    @staticmethod
+    def mask(batch_id, concept_ids, layer_name):
         raise NotImplementedError("'Concept'class must be implemented!")
 
-    def mask_rf(self, neuron_ids, layer_name):
+    @staticmethod
+    def mask_rf(batch_id: int, c_n_map: dict[int, list], layer_name=None):
         raise NotImplementedError("'Concept'class must be implemented!")
 
     def reference_sampling(
-        self, relevance, layer_name: str = None, max_target: str = "sum", abs_norm=True
+        self, relevance, layer_name=None, max_target: str = "sum", abs_norm=True
     ):
         raise NotImplementedError("'Concept'class must be implemented!")
 
     def get_rf_indices(self, output_shape, layer_name):
         raise NotImplementedError("'Concept'class must be implemented!")
 
-    def attribute(self, relevance, mask=None, layer_name: str = None, abs_norm=True):
+    def attribute(self, relevance, mask=None, layer_name=None, abs_norm=True):
         raise NotImplementedError("'Concept'class must be implemented!")
 
 
@@ -33,7 +33,7 @@ class ChannelConcept(Concept):
     """
 
     @staticmethod
-    def mask(batch_id: int, concept_ids: List, layer_name=None):
+    def mask(batch_id: int, concept_ids: list, layer_name=None):
         """
         Wrapper that generates a function thath modifies the gradient (replaced by zennit by attributions).
 
@@ -59,7 +59,7 @@ class ChannelConcept(Concept):
         return mask_fct
 
     @staticmethod
-    def mask_rf(batch_id: int, c_n_map: Dict[int, List], layer_name=None):
+    def mask_rf(batch_id: int, c_n_map: dict[int, list], layer_name=None):
         """
         Wrapper that generates a function that modifies the gradient (replaced by zennit by attributions) for a single neuron.
 
@@ -98,7 +98,7 @@ class ChannelConcept(Concept):
             end = np.prod(output_shape[1:])
             return np.arange(0, end)
 
-    def attribute(self, relevance, mask=None, layer_name: str = None, abs_norm=True):
+    def attribute(self, relevance, mask=None, layer_name=None, abs_norm=True):
         if isinstance(mask, torch.Tensor):
             relevance = relevance * mask
 
@@ -110,7 +110,7 @@ class ChannelConcept(Concept):
         return rel_l
 
     def reference_sampling(
-        self, relevance, layer_name: str = None, max_target: str = "sum", abs_norm=True
+        self, relevance, layer_name=None, max_target: str = "sum", abs_norm=True
     ):
         """
         Parameters:
