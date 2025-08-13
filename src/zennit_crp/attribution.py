@@ -338,7 +338,7 @@ class CondAttribution:
 
     def _attribute(
         self,
-        data: torch.tensor,
+        data: torch.Tensor,
         conditions: List[Dict[str, List]],
         composite: Composite = None,
         record_layer: List[str] = [],
@@ -416,7 +416,7 @@ class CondAttribution:
 
     def generate(
         self,
-        data: torch.tensor,
+        data: torch.Tensor,
         conditions: List[Dict[str, List]],
         composite: Composite = None,
         record_layer: List[str] = [],
