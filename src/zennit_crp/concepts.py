@@ -50,9 +50,10 @@ class ChannelConcept(Concept):
         """
 
         def mask_fct(grad):
-            mask = torch.zeros_like(grad[batch_id])
-            mask[concept_ids] = 1
-            grad[batch_id] = grad[batch_id] * mask
+            for g in grad:
+                mask = torch.zeros_like(g[batch_id])
+                mask[concept_ids] = 1
+                g[batch_id] = g[batch_id] * mask
 
             return grad
 

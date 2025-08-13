@@ -12,13 +12,12 @@ class MaskHook(Hook):
             masks = [self._default_mask]
         self.masks = masks
         super().__init__()
-
-    def backward(self, module, grad_input, grad_output):
+    
+    def pre_backward(self, module, grad_input, grad_output):
         """Hook applied during backward-pass"""
+        super().pre_backward(module, grad_input, grad_output)
         for mask in self.masks:
-            grad = mask(grad_input)
-
-        return tuple(grad)
+            mask(grad_input)
 
     def copy(self):
         """Return a copy of this hook.
