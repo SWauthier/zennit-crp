@@ -35,8 +35,8 @@ class SimpleModel(nn.Module):
 
 
 class OneDimCondAttribution(CondAttribution):
-    def heatmap_modifier(self, data, on_device=None):
-        heatmap = data.grad.detach()
+    def heatmap_modifier(self, inputs, on_device=None):
+        heatmap = inputs.grad.detach()
         heatmap = heatmap.to(on_device) if on_device else heatmap
         return heatmap
 
@@ -79,7 +79,6 @@ def test_parallel_attribution(simple_cond_attribution):
     assert torch.allclose(attr.heatmap, torch.tensor([-0.1, 0.2]))
     assert torch.allclose(attr.relevances["layer1"], torch.tensor([0.1, 0.0]))
     assert torch.allclose(attr.relevances["layer2"], torch.tensor([0.0, 0.0]))
-
     conditions = [{"y": [0], "layer1": [0]}]
 
     inp.grad = None

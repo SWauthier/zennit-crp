@@ -3,11 +3,10 @@ import warnings
 from collections import namedtuple
 from typing import Callable, Dict, List, Tuple, Union
 
-import numpy as np
 import torch
 from tqdm import tqdm
 from zennit.composites import NameMapComposite
-from zennit.core import Composite
+from zennit.core import Composite, RemovableHandleList
 
 from zennit_crp.concepts import ChannelConcept
 from zennit_crp.graph import ModelGraph
@@ -51,19 +50,25 @@ class CondAttribution:
             self.model.requires_grad_(False)
 
     def backward(
-        self, pred, grad_mask, partial_backward, layer_names, layer_out, generate=False
+        self,
+        outputs,
+        inputs,
+        grad_outputs,
+        partial_backward,
+        modules_to_condition,
+        recorded_modules,
+        generate=False,
     ):
-        if partial_backward and len(layer_names) > 0:
-            wrt_tensor, grad_tensors = pred, grad_mask.to(pred)
-
-            for l_name in layer_names:
-                inputs = layer_out[l_name]
+        if partial_backward and len(modules_to_condition) > 0:
+            start_inputs = inputs
+            for module_name in modules_to_condition:
+                inputs = recorded_modules[module_name]
 
                 try:
                     grad = torch.autograd.grad(
-                        wrt_tensor,
+                        outputs=outputs,
                         inputs=inputs,
-                        grad_outputs=grad_tensors,
+                        grad_outputs=grad_outputs,
                         retain_graph=True,
                     )
                 except RuntimeError as e:
@@ -84,12 +89,21 @@ class CondAttribution:
                         " parallel layers can not be used in one condition."
                     )
 
-                wrt_tensor, grad_tensors = layer_out[l_name], grad
+                outputs, grad_outputs = inputs, grad
 
-            torch.autograd.backward(wrt_tensor, grad_tensors, retain_graph=generate)
+            # torch.autograd.backward(outputs, grad_outputs, retain_graph=generate)
+            grad = torch.autograd.grad(
+                outputs,
+                inputs=start_inputs,
+                grad_outputs=grad_outputs,
+                retain_graph=generate,
+            )
+            start_inputs.grad = grad[0] if isinstance(grad, tuple) else grad
 
         else:
-            torch.autograd.backward(pred, grad_mask.to(pred), retain_graph=generate)
+            torch.autograd.backward(
+                outputs, grad_outputs.to(outputs), retain_graph=generate
+            )
 
     def relevance_init(self, prediction, target_list, init_rel):
         """
@@ -112,7 +126,7 @@ class CondAttribution:
             output_selection = init_rel(prediction)
         elif isinstance(init_rel, torch.Tensor):
             output_selection = init_rel
-        elif isinstance(init_rel, (int, np.integer)):
+        elif isinstance(init_rel, int):
             output_selection = torch.full(prediction.shape, init_rel)
         else:
             output_selection = prediction
@@ -123,10 +137,10 @@ class CondAttribution:
                 mask[i, targets] = output_selection[i, targets]
             output_selection = mask
 
-        return output_selection
+        return output_selection.to(prediction)
 
-    def heatmap_modifier(self, data, on_device=None):
-        heatmap = data.grad.detach()
+    def heatmap_modifier(self, inputs, on_device=None):
+        heatmap = inputs.grad.detach()
         heatmap = heatmap.to(on_device) if on_device else heatmap
         return torch.sum(heatmap, dim=1)
 
@@ -196,7 +210,7 @@ class CondAttribution:
 
     def __call__(
         self,
-        data: torch.tensor,
+        data: torch.Tensor,
         conditions: List[Dict[str, List]],
         composite: Composite = None,
         record_layer: List[str] = [],
@@ -338,12 +352,12 @@ class CondAttribution:
 
     def _attribute(
         self,
-        data: torch.Tensor,
+        inputs: torch.Tensor,
         conditions: List[Dict[str, List]],
         composite: Composite = None,
-        record_layer: List[str] = [],
+        modules_to_record: List[str] = [],
         mask_map: Union[Callable, Dict[str, Callable]] = ChannelConcept.mask,
-        start_layer: str = None,
+        start_module: str = None,
         init_rel=None,
         on_device: str = None,
         exclude_parallel=True,
@@ -353,11 +367,13 @@ class CondAttribution:
         exclude_parallel: boolean
             If set, all layer names in 'conditions' must be identical. This limitation does not apply to the __call__ method.
         """
-        data, conditions = self.broadcast(data, conditions)
+        inputs, conditions = self.broadcast(inputs, conditions)
 
-        self._check_arguments(data, conditions, start_layer, exclude_parallel, init_rel)
+        self._check_arguments(
+            inputs, conditions, start_module, exclude_parallel, init_rel
+        )
 
-        hook_map, y_targets, cond_l_names = {}, [], []
+        hook_map, y_targets, modules_to_condition = {}, [], []
         for i, cond in enumerate(conditions):
             for l_name, indices in cond.items():
                 if l_name == self.MODEL_OUTPUT_NAME:
@@ -368,11 +384,11 @@ class CondAttribution:
                     self._register_mask_fn(
                         hook_map[l_name], mask_map, i, indices, l_name
                     )
-                    if l_name not in cond_l_names:
-                        cond_l_names.append(l_name)
+                    if l_name not in modules_to_condition:
+                        modules_to_condition.append(l_name)
 
-        handles, layer_out = self._append_recording_layer_hooks(
-            record_layer, start_layer, cond_l_names
+        handles, recorded_modules = self._append_recording_layer_hooks(
+            modules_to_record, start_module, modules_to_condition
         )
 
         name_map = [([name], hook) for name, hook in hook_map.items()]
@@ -385,34 +401,46 @@ class CondAttribution:
             mask_composite.context(self.model),
             composite.context(self.model) as modified,
         ):
-            if start_layer:
-                _ = modified(data)
-                pred = layer_out[start_layer]
-                grad_mask = self.relevance_init(pred.detach().clone(), None, init_rel)
-                if start_layer in cond_l_names:
-                    cond_l_names.remove(start_layer)
+            if start_module:
+                _ = modified(inputs)
+                prediction = recorded_modules[start_module]
+                init_relevance = self.relevance_init(
+                    prediction.detach().clone(), None, init_rel
+                )
+                if start_module in modules_to_condition:
+                    modules_to_condition.remove(start_module)
                 self.backward(
-                    pred, grad_mask, exclude_parallel, cond_l_names, layer_out
+                    prediction,
+                    inputs,
+                    init_relevance,
+                    exclude_parallel,
+                    modules_to_condition,
+                    recorded_modules,
                 )
 
             else:
-                pred = modified(data)
-                grad_mask = self.relevance_init(
-                    pred.detach().clone(), y_targets, init_rel
+                prediction = modified(inputs)
+                init_relevance = self.relevance_init(
+                    prediction.detach().clone(), y_targets, init_rel
                 )
                 self.backward(
-                    pred, grad_mask, exclude_parallel, cond_l_names, layer_out
+                    prediction,
+                    inputs,
+                    init_relevance,
+                    exclude_parallel,
+                    modules_to_condition,
+                    recorded_modules,
                 )
 
-            attribution = self.heatmap_modifier(data, on_device)
+            attribution = self.heatmap_modifier(inputs, on_device)
             activations, relevances = {}, {}
-            if len(layer_out) > 0:
+            if len(recorded_modules) > 0:
                 activations, relevances = self._collect_hook_activation_relevance(
-                    layer_out, on_device
+                    recorded_modules, on_device
                 )
-            [h.remove() for h in handles]
+            handles.remove()
 
-        return attrResult(attribution, activations, relevances, pred)
+        return attrResult(attribution, activations, relevances, prediction)
 
     def generate(
         self,
@@ -522,6 +550,7 @@ class CondAttribution:
                 )
                 self.backward(
                     pred,
+                    data_batch,
                     grad_mask,
                     exclude_parallel,
                     cond_l_names,
@@ -557,46 +586,53 @@ class CondAttribution:
         return get_tensor_hook
 
     def _append_recording_layer_hooks(
-        self, record_l_names: list, start_layer, cond_l_names
+        self, modules_to_record, start_module, modules_to_condition
     ):
         """
         applies a forward hook to all layers in record_l_names, start_layer and cond_l_names to record
         the activations and relevances
         """
 
-        handles = []
-        layer_out = {}
-        record_l_names = record_l_names.copy()
+        handles = RemovableHandleList()
+        recorded_modules = {}
+        modules_to_record = modules_to_record.copy()
 
-        for l_name in cond_l_names:
-            if l_name not in record_l_names:
-                record_l_names.append(l_name)
+        # add module names to be conditioned on to the list of modules to record
+        for l_name in modules_to_condition:
+            if l_name not in modules_to_record:
+                modules_to_record.append(l_name)
 
-        if start_layer is not None and start_layer not in record_l_names:
-            record_l_names.append(start_layer)
+        # if it exists, add start_module to the list of modules to record
+        if start_module is not None and start_module not in modules_to_record:
+            modules_to_record.append(start_module)
 
-        for name, layer in self.model.named_modules():
-            if name == self.MODEL_OUTPUT_NAME:
+        for module_name, module in self.model.named_modules():
+            # if module is the output module, throw error
+            if module_name == self.MODEL_OUTPUT_NAME:
                 raise ValueError(
                     "No layer name should match the constant for the identifier of the model output."
                     "Please change the layer name or the OUTPUT_NAME constant of the object."
                     "Note, that the condition set then references to the output with OUTPUT_NAME and no longer 'y'."
                 )
 
-            if name in record_l_names:
-                h = layer.register_forward_hook(self._generate_hook(name, layer_out))
+            # if module is in the list of modules to record, register a forward hook
+            # and remove it from the list of modules to record
+            if module_name in modules_to_record:
+                h = module.register_forward_hook(
+                    self._generate_hook(module_name, recorded_modules)
+                )
                 handles.append(h)
-                record_l_names.remove(name)
+                modules_to_record.remove(module_name)
 
-        if start_layer in record_l_names:
-            raise KeyError(f"<start_layer> {start_layer} not found in model.")
-        if len(record_l_names) > 0:
-            warnings.warn(f"Some layer names not found in model: {record_l_names}.")
+        if start_module in modules_to_record:
+            raise KeyError(f"<start_module> {start_module} not found in model.")
+        if len(modules_to_record) > 0:
+            warnings.warn(f"Some layer names not found in model: {modules_to_record}.")
 
-        return handles, layer_out
+        return handles, recorded_modules
 
     def _collect_hook_activation_relevance(
-        self, layer_out, on_device=None, length=None
+        self, recorded_modules, on_device=None, length=None
     ):
         """
 
@@ -612,19 +648,19 @@ class CondAttribution:
 
         relevances = {}
         activations = {}
-        for name in layer_out:
-            act = layer_out[name].detach()[:length]
+        for name in recorded_modules:
+            act = recorded_modules[name].detach()[:length]
             activations[name] = act.to(on_device) if on_device else act
             activations[name].requires_grad = False
 
-            if layer_out[name].grad is None:
+            if recorded_modules[name].grad is None:
                 rel = torch.zeros_like(activations[name], requires_grad=False)[:length]
                 relevances[name] = rel.to(on_device) if on_device else rel
             else:
-                rel = layer_out[name].grad.detach()[:length]
+                rel = recorded_modules[name].grad.detach()[:length]
                 relevances[name] = rel.to(on_device) if on_device else rel
                 relevances[name].requires_grad = False
-                layer_out[name].grad = None
+                recorded_modules[name].grad = None
 
         return activations, relevances
 
