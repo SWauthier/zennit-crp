@@ -8,10 +8,10 @@ class MaskHook(Hook):
     """Mask hooks for adaptive gradient masking or simple modification."""
 
     def __init__(self, masks=None):
+        super().__init__()
         if masks is None:
             masks = [self._default_mask]
         self.masks = masks
-        super().__init__()
     
     def pre_backward(self, module, grad_input, grad_output):
         """Hook applied during backward-pass"""
