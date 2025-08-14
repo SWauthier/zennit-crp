@@ -9,7 +9,7 @@ from tqdm import tqdm
 from zennit.composites import NameMapComposite
 from zennit.core import Composite
 
-from zennit_crp.concepts import ChannelConcept, Concept
+from zennit_crp.concepts import ChannelConcept
 from zennit_crp.graph import ModelGraph
 from zennit_crp.hooks import MaskHook
 
@@ -644,7 +644,7 @@ class AttributionGraph:
         self,
         attribution: CondAttribution,
         graph: ModelGraph,
-        layer_map: Dict[str, Concept],
+        layer_map: Dict[str, ChannelConcept],
     ):
         self.attribution = attribution
         self.graph = graph

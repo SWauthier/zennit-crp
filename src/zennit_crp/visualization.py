@@ -13,7 +13,7 @@ from zennit.composites import Composite, NameMapComposite
 
 from zennit_crp.attribution import CondAttribution
 from zennit_crp.cache import Cache
-from zennit_crp.concepts import ChannelConcept, Concept
+from zennit_crp.concepts import ChannelConcept
 from zennit_crp.helper import load_maximization, load_stat_targets, load_statistics
 from zennit_crp.hooks import FeatVisHook
 from zennit_crp.image import vis_img_heatmap, vis_opaque_img
@@ -26,7 +26,7 @@ class FeatureVisualization:
         self,
         attribution: CondAttribution,
         dataset,
-        layer_map: Dict[str, Concept],
+        layer_map: Dict[str, ChannelConcept],
         preprocess_fn: Callable = None,
         max_target="sum",
         abs_norm=True,

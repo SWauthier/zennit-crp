@@ -2,32 +2,7 @@ import numpy as np
 import torch
 
 
-class Concept:
-    """
-    Abstract class that imlplements the core functionality for the attribution computation of concepts.
-    """
-
-    @staticmethod
-    def mask(batch_id, concept_ids, layer_name):
-        raise NotImplementedError("'Concept'class must be implemented!")
-
-    @staticmethod
-    def mask_rf(batch_id: int, c_n_map: dict[int, list], layer_name=None):
-        raise NotImplementedError("'Concept'class must be implemented!")
-
-    def reference_sampling(
-        self, relevance, layer_name=None, max_target: str = "sum", abs_norm=True
-    ):
-        raise NotImplementedError("'Concept'class must be implemented!")
-
-    def get_rf_indices(self, output_shape, layer_name):
-        raise NotImplementedError("'Concept'class must be implemented!")
-
-    def attribute(self, relevance, mask=None, layer_name=None, abs_norm=True):
-        raise NotImplementedError("'Concept'class must be implemented!")
-
-
-class ChannelConcept(Concept):
+class ChannelConcept:
     """
     Concept Class for torch.nn.Conv2D and torch.nn.Linear layers
     """
@@ -53,7 +28,7 @@ class ChannelConcept(Concept):
             for g in grad:
                 mask = torch.zeros_like(g[batch_id])
                 mask[concept_ids] = 1
-                g[batch_id] = g[batch_id] * mask
+                g[batch_id] = mask * g[batch_id]
 
             return grad
 

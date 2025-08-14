@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from zennit_crp.concepts import Concept
+from zennit_crp.concepts import ChannelConcept
 
 
 class Maximization:
@@ -40,7 +40,7 @@ class Maximization:
         # TODO: for statistics in other class: make dummy variable for extra datset instead of SDS
 
     def analyze_layer(
-        self, rel, concept: Concept, layer_name: str, data_indices, targets
+        self, rel, concept: ChannelConcept, layer_name: str, data_indices, targets
     ):
         b_c_sorted, rel_c_sorted, rf_c_sorted = concept.reference_sampling(
             rel, layer_name, self.max_target, self.abs_norm
