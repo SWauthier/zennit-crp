@@ -1,12 +1,11 @@
 import os
 from pathlib import Path
-from typing import List
 
 import numpy as np
 import torch
 
 
-def get_layer_names(model: torch.nn.Module, types: List):
+def get_layer_names(model: torch.nn.Module, types: list):
     """
     Retrieves the layer names of all layers that belong to a torch.nn.Module type defined
     in 'types'.
@@ -53,7 +52,7 @@ def max_norm(rel, stabilize=1e-10):
     return rel / (rel.max() + stabilize)
 
 
-def get_output_shapes(model, single_sample: torch.tensor, record_layers: List[str]):
+def get_output_shapes(model, single_sample: torch.Tensor, record_layers: list[str]):
     """
     calculates the output shape of each layer using a forward pass.
 
@@ -94,7 +93,7 @@ def load_maximization(path_folder, layer_name):
 
 
 def load_stat_targets(path_folder):
-    targets = np.load(Path(path_folder) / Path("targets.npy")).astype(np.int)
+    targets = np.load(Path(path_folder) / Path("targets.npy")).astype(np.int32)
 
     return targets
 
