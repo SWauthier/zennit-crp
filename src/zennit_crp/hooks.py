@@ -17,7 +17,8 @@ class MaskHook(Hook):
         """Hook applied during backward-pass"""
         super().pre_backward(module, grad_input, grad_output)
         for mask in self.masks:
-            mask(grad_input)
+            grad_input = mask(grad_input)
+        return grad_input
 
     def copy(self):
         """Return a copy of this hook.
