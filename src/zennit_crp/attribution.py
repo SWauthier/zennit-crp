@@ -399,8 +399,8 @@ class CondAttribution:
             composite = Composite()
 
         with (
-            mask_composite.context(self.model),
-            composite.context(self.model) as modified,
+            composite.context(self.model),
+            mask_composite.context(self.model) as modified,
         ):
             if start_module:
                 _ = modified(inputs)
