@@ -69,7 +69,7 @@ class CondAttribution:
                         outputs=outputs,
                         inputs=inputs,
                         grad_outputs=grad_outputs,
-                        retain_graph=True,
+                        retain_graph=generate,
                     )
                 except RuntimeError as e:
                     if "allow_unused=True" not in str(e):
