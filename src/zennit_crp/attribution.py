@@ -89,6 +89,7 @@ class CondAttribution:
                         " parallel layers can not be used in one condition."
                     )
 
+                inputs.grad = None
                 outputs, grad_outputs = inputs, grad
 
             # torch.autograd.backward(outputs, grad_outputs, retain_graph=generate)
