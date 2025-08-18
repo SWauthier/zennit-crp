@@ -100,7 +100,7 @@ def test_fashion_attribution(get_fashion_model_data):
 
     attribution = CondAttribution(model)
 
-    composite = EpsilonPlus([SequentialMergeBatchNorm()])
+    composite = EpsilonPlus(canonizers=[SequentialMergeBatchNorm()])
 
     test_sample, target = dataset[0]
     test_sample = test_sample.unsqueeze(0).requires_grad_()
@@ -144,7 +144,7 @@ def test_fashion_generator_attribution(get_fashion_model_data):
 
     attribution = CondAttribution(model)
 
-    composite = EpsilonPlus([SequentialMergeBatchNorm()])
+    composite = EpsilonPlus(canonizers=[SequentialMergeBatchNorm()])
 
     test_sample, target = dataset[0]
     test_sample = test_sample.unsqueeze(0).requires_grad_()
@@ -197,7 +197,7 @@ def test_fashion_feature_visualization(get_fashion_model_data):
     layer_map = {"conv2": cc, "parallel.0": cc}
     fv = FeatureVisualization(attribution, dataset, layer_map, path="tests/results/fashion_fv")
 
-    composite = EpsilonPlus([SequentialMergeBatchNorm()])
+    composite = EpsilonPlus(canonizers=[SequentialMergeBatchNorm()])
     fv.run(composite, 0, len(dataset))
 
     ref_c = fv.get_max_reference([0, 2, 10, 11], "conv2", "relevance", (0, 4), composite, rf=True, plot_fn=None)
