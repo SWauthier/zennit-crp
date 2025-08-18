@@ -54,12 +54,12 @@ class CondAttribution:
         outputs,
         inputs,
         grad_outputs,
-        partial_backward,
+        backward_in_parts,
         modules_to_condition,
         recorded_modules,
         generate=False,
     ):
-        if partial_backward and len(modules_to_condition) > 0:
+        if backward_in_parts and len(modules_to_condition) > 0:
             start_inputs = inputs
             for module_name in modules_to_condition:
                 inputs = recorded_modules[module_name]
