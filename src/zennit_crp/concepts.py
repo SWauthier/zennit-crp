@@ -25,14 +25,11 @@ class ChannelConcept:
         """
 
         def mask_fct(grad):
-            def mask_tensor(tensor):
-                masked_tensor = tensor.clone()
-                mask = torch.zeros_like(tensor[batch_id])
-                mask[concept_ids] = 1
-                masked_tensor[batch_id] = mask * tensor[batch_id]
-                return masked_tensor
-
-            return tuple(mask_tensor(g) for g in grad)
+            mask = torch.zeros_like(grad[batch_id])
+            mask[concept_ids] = 1
+            masked_tensor = grad.clone()
+            masked_tensor[batch_id] = mask * masked_tensor[batch_id]
+            return masked_tensor
 
         return mask_fct
 
