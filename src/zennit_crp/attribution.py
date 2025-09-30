@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Tuple, Union
 
 import torch
 from tqdm import tqdm
+from zennit.attribution import Gradient
 from zennit.composites import NameMapComposite
 from zennit.core import Composite, RemovableHandleList
 
@@ -16,6 +17,109 @@ attrResult = namedtuple(
     "AttributionResults", "heatmap, activations, relevances, prediction"
 )
 attrGraphResult = namedtuple("AttributionGraphResults", "nodes, connections")
+
+
+class ConditionalGradient(Gradient):
+    """Gradient Attributor for use in conjunction with Concepts. The result is the product of the attribution
+    output and the (possibly modified) jacobian. With a composite, i.e. `EpsilonGammaBox`, this will compute
+    the Concept Relevance Propagation attribution values.
+
+    Parameters
+    ----------
+    model: :py:obj:`torch.nn.Module`
+        The model for which the attribution will be computed. If `composite` is provided, this will also be the model
+        to which the composite will be registered within `with` statements, or when calling the `Attributor` instance.
+    composite: :py:obj:`zennit.core.Composite`, optional
+        The optional composite to, if provided, be registered to the model within `with` statements or when calling the
+        `Attributor` instance.
+    attr_output: :py:obj:`torch.Tensor` or callable, optional
+        The default output attribution to be used when calling the `Attributor` instance, which is either a Tensor
+        compatible with any input used, or a function of the model's output. If None (default), the value will be the
+        identity function.
+    create_graph: bool, optional
+        Specify whether to use ``create_graph=True`` (default is False) to compute the gradient with
+        :py:obj:`torch.autograd.grad`. This needs to be `True` to compute higher order gradients.
+    retain_graph: bool, optional
+        Specify whether to use ``retain_graph=True`` (default is the value of create_graph) to compute the gradient
+        with :py:obj:`torch.autograd.grad`.
+    """
+
+    def __init__(
+        self,
+        model,
+        composite=None,
+        attr_output=None,
+        create_graph=False,
+        retain_graph=None,
+        exclude_parallel=False,
+    ):
+        super().__init__(
+            model=model,
+            composite=composite,
+            attr_output=attr_output,
+            create_graph=create_graph,
+            retain_graph=retain_graph,
+        )
+        self.exclude_parallel = exclude_parallel
+
+    def grad(self, input, attr_output_fn):
+        """Compute the gradient of the model wrt. input, by using ``attr_output_fn`` as the function of the model
+        output to provide the vector for the vector jacobian product.
+        This function is used by subclasses to compute the gradient with the same parameters.
+
+        Parameters
+        ----------
+        input: :py:obj:`torch.Tensor`
+            Input for the model.
+        attr_output_fn: :py:obj:`torch.Tensor` or callable, optional
+            The output attribution function of the model's output.
+
+        Returns
+        -------
+        output: :py:obj:`torch.Tensor`
+            Output of the model given ``input``.
+        gradient: :py:obj:`torch.Tensor`
+            Gradient of the model wrt. to ``input``, with the same shape as ``input``.
+        """
+        if not input.requires_grad:
+            input.requires_grad = True
+        output = self.model(input)
+        attr_output = attr_output_fn(output)
+
+        if self.exclude_parallel and len(modules_to_condition) > 0:
+            for module_name in modules_to_condition:
+                intermediate_input = recorded_modules[module_name]
+
+                try:
+                    (gradient,) = torch.autograd.grad(
+                        (output,),
+                        (intermediate_input,),
+                        grad_outputs=(attr_output,),
+                        retain_graph=self.retain_graph or generate,
+                        create_graph=self.create_graph,
+                    )
+                except RuntimeError as e:
+                    if "allow_unused=True" not in str(e):
+                        raise e
+                    else:
+                        raise RuntimeError(
+                            "The layer names must be ordered according to their succession in the model if 'exclude_parallel'=True."
+                            " Please make sure to start with the last and end with the first layer in each condition dict. In addition,"
+                            " parallel layers can not be used in one condition."
+                        )
+
+                intermediate_input.grad = None
+                output = intermediate_input
+                attr_output = gradient
+
+        (gradient,) = torch.autograd.grad(
+            (output,),
+            (input,),
+            grad_outputs=(attr_output,),
+            retain_graph=self.retain_graph or generate,
+            create_graph=self.create_graph,
+        )
+        return output, gradient
 
 
 class CondAttribution:
@@ -49,6 +153,7 @@ class CondAttribution:
         if no_param_grad:
             self.model.requires_grad_(False)
 
+    # DONE
     def backward(
         self,
         outputs,
@@ -106,6 +211,7 @@ class CondAttribution:
                 outputs, grad_outputs.to(outputs), retain_graph=generate
             )
 
+    # DONE: will be done externally
     def relevance_init(self, prediction, target_list, init_rel):
         """
 
@@ -140,6 +246,7 @@ class CondAttribution:
 
         return output_selection.to(prediction)
 
+    # DONE: will be done externally
     def heatmap_modifier(self, inputs, on_device=None):
         heatmap = inputs.grad.detach()
         heatmap = heatmap.to(on_device) if on_device else heatmap
@@ -351,6 +458,7 @@ class CondAttribution:
 
         return distinct_cond
 
+    # TODO: handle externally in new composite (MaskComposite?)
     def _attribute(
         self,
         inputs: torch.Tensor,
