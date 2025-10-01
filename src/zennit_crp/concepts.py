@@ -66,6 +66,7 @@ class ChannelConcept:
 
         return mask_fct
 
+    # unused?
     def get_rf_indices(self, output_shape, layer_name=None):
         if len(output_shape) == 1:
             return [0]
@@ -73,6 +74,7 @@ class ChannelConcept:
             end = np.prod(output_shape[1:])
             return np.arange(0, end)
 
+    # unused?
     def attribute(self, relevance, mask=None, layer_name=None, abs_norm=True):
         if isinstance(mask, torch.Tensor):
             relevance = relevance * mask

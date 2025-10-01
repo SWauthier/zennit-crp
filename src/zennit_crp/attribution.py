@@ -252,6 +252,7 @@ class CondAttribution:
         heatmap = heatmap.to(on_device) if on_device else heatmap
         return torch.sum(heatmap, dim=1)
 
+    # TODO: implement somewhere
     def broadcast(self, data, conditions) -> Tuple[torch.Tensor, Dict]:
         len_data, len_cond = len(data), len(conditions)
 
@@ -267,6 +268,7 @@ class CondAttribution:
         data.retain_grad()
         return data, conditions
 
+    # TODO: verify whether these checks are needed
     def _check_arguments(
         self, data, conditions, start_layer, exclude_parallel, init_rel
     ):
@@ -306,6 +308,7 @@ class CondAttribution:
                         " same layer names. (This limitation does not apply to the __call__ method)"
                     )
 
+    # DONE
     def _register_mask_fn(self, hook, mask_map, b_index, c_indices, l_name):
         if callable(mask_map):
             mask_fn = mask_map(b_index, c_indices, l_name)
@@ -316,6 +319,7 @@ class CondAttribution:
 
         hook.masks.append(mask_fn)
 
+    # TODO: implement somewhere (see _conditions_wrapper)
     def __call__(
         self,
         data: torch.Tensor,
@@ -405,6 +409,7 @@ class CondAttribution:
                 False,
             )
 
+    # TODO: implement somewhere
     def _conditions_wrapper(self, *args):
         """
         Since 'exclude_parallel'=True requires that the condition set contains only the same layer names,
@@ -442,6 +447,7 @@ class CondAttribution:
 
         return attrResult(heatmap, activations, relevances, prediction)
 
+    # TODO: implement somewhere (see _conditions_wrapper)
     def _separate_conditions(self, conditions):
         """
         Finds identical subsets of layer names inside 'conditions'
@@ -551,6 +557,7 @@ class CondAttribution:
 
         return attrResult(attribution, activations, relevances, prediction)
 
+    # TODO: figure this out
     def generate(
         self,
         data: torch.Tensor,
@@ -686,6 +693,7 @@ class CondAttribution:
         if verbose:
             pbar.close()
 
+    # DONE: will be done externally (see _append_recording_layer_hooks)
     @staticmethod
     def _generate_hook(layer_name, layer_out):
         def get_tensor_hook(module, input, output):
@@ -694,6 +702,7 @@ class CondAttribution:
 
         return get_tensor_hook
 
+    # DONE: will be done externally
     def _append_recording_layer_hooks(
         self, modules_to_record, start_module, modules_to_condition
     ):
@@ -740,6 +749,7 @@ class CondAttribution:
 
         return handles, recorded_modules
 
+    # DONE: will be done externally
     def _collect_hook_activation_relevance(
         self, recorded_modules, on_device=None, length=None
     ):
