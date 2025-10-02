@@ -11,7 +11,7 @@ from zennit.core import Composite, RemovableHandleList
 
 from zennit_crp.concepts import ChannelConcept
 from zennit_crp.graph import ModelGraph
-from zennit_crp.hooks import MaskHook
+from zennit_crp.rules import MaskHook
 
 attrResult = namedtuple(
     "AttributionResults", "heatmap, activations, relevances, prediction"
@@ -42,6 +42,9 @@ class ConditionalGradient(Gradient):
     retain_graph: bool, optional
         Specify whether to use ``retain_graph=True`` (default is the value of create_graph) to compute the gradient
         with :py:obj:`torch.autograd.grad`.
+    exclude_parallel: bool, optional
+        If True, the PyTorch gradient flow is restricted so that it does not enter into parallel layers
+        of the layers mentioned in the 'conditions' dictionary.
     """
 
     def __init__(

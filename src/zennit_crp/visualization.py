@@ -15,7 +15,7 @@ from zennit_crp.attribution import CondAttribution
 from zennit_crp.cache import Cache
 from zennit_crp.concepts import ChannelConcept
 from zennit_crp.helper import load_maximization, load_stat_targets, load_statistics
-from zennit_crp.hooks import FeatVisHook
+from zennit_crp.rules import FeatVisHook
 from zennit_crp.image import vis_img_heatmap, vis_opaque_img
 from zennit_crp.maximization import Maximization
 from zennit_crp.statistics import Statistics

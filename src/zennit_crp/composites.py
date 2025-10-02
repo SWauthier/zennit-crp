@@ -2,12 +2,28 @@ import torch
 from zennit.composites import NameMapComposite, register_composite
 from zennit.core import Composite
 
-from zennit_crp.hooks import MaskHook
+from zennit_crp.rules import MaskHook
 
 
 @register_composite("mask")
 class MaskComposite(NameMapComposite):
-    """Composite that applies a mask to the gradients at specified layers."""
+    """Composite that applies a mask to the gradients at specified layers.
+    Each condition corresponds to a batch.
+    
+    Parameters
+    ----------
+    conditions: list of dict
+        Each dictionary in the list contains module names as keys and lists of concept indices as values.
+    mask_map: callable or dict, optional
+        If callable, it should be a function that takes (batch_id, concept_ids) as arguments and returns a function
+        that modifies the gradient. If dict, it should map module names to such functions.
+        If None, a default mask function is used that zeros out all but the specified concept indices.
+    name_map: list of (list of str, Hook), optional
+        A mapping as a list of tuples, with a tuple of applicable module names and a Hook. This will be prepended to
+        the ``name_map`` defined by the composite.
+    canonizers: list of :py:class:`zennit.canonizers.Canonizer`, optional
+        List of canonizer instances to be applied before applying hooks.
+    """
 
     MODEL_OUTPUT_NAME = "y"
 
@@ -18,24 +34,24 @@ class MaskComposite(NameMapComposite):
             name_map = []
 
         hook_map = {}
-        for i, cond in enumerate(conditions):
-            for l_name, indices in cond.items():
-                if l_name != self.MODEL_OUTPUT_NAME:
-                    if l_name not in hook_map:
-                        hook_map[l_name] = MaskHook([])
-                    mask_fn = self._mask_fn(mask_map, i, indices, l_name)
-                    hook_map[l_name].masks.append(mask_fn)
+        for i, condition in enumerate(conditions):
+            for module_name, concept_ids in condition.items():
+                if module_name != self.MODEL_OUTPUT_NAME:
+                    if module_name not in hook_map:
+                        hook_map[module_name] = MaskHook([])
+                    mask_fn = self._mask_fn(mask_map, i, concept_ids, module_name)
+                    hook_map[module_name].masks.append(mask_fn)
 
         name_map = name_map + [([name], hook) for name, hook in hook_map.items()]
 
         super().__init__(name_map=name_map, canonizers=canonizers)
 
     @staticmethod
-    def _mask_fn(mask_map, b_index, c_indices, l_name):
+    def _mask_fn(mask_map, batch_id, concept_ids, module_name):
         if callable(mask_map):
-            return mask_map(b_index, c_indices, l_name)
+            return mask_map(batch_id, concept_ids)
         elif isinstance(mask_map, dict):
-            return mask_map[l_name](b_index, c_indices, l_name)
+            return mask_map[module_name](batch_id, concept_ids)
         else:
             raise ValueError("<mask_map> must be a dictionary or callable function.")
 
