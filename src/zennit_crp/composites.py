@@ -2,7 +2,7 @@ import torch
 from zennit.composites import NameMapComposite, register_composite
 from zennit.core import Composite
 
-from zennit_crp.rules import MaskHook
+from zennit_crp.rules import Mask
 
 
 @register_composite("mask")
@@ -38,7 +38,7 @@ class MaskComposite(NameMapComposite):
             for module_name, concept_ids in condition.items():
                 if module_name != self.MODEL_OUTPUT_NAME:
                     if module_name not in hook_map:
-                        hook_map[module_name] = MaskHook([])
+                        hook_map[module_name] = Mask([])
                     mask_fn = self._mask_fn(mask_map, i, concept_ids, module_name)
                     hook_map[module_name].masks.append(mask_fn)
 

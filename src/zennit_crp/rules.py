@@ -4,7 +4,7 @@ import weakref
 from zennit.core import Hook, RemovableHandle, RemovableHandleList
 
 
-class MaskHook(Hook):
+class Mask(Hook):
     """Mask hooks for adaptive gradient masking or simple modification."""
 
     def __init__(self, masks=None):
@@ -26,7 +26,7 @@ class MaskHook(Hook):
         This is used to describe hooks of different modules by a single hook instance.
         Copies retain the same masks.
         """
-        return MaskHook(masks=self.masks)
+        return Mask(masks=self.masks)
 
     def remove(self):
         """When removing hooks, remove all stored mask_fn."""

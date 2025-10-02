@@ -11,7 +11,7 @@ from zennit.core import Composite, RemovableHandleList
 
 from zennit_crp.concepts import ChannelConcept
 from zennit_crp.graph import ModelGraph
-from zennit_crp.rules import MaskHook
+from zennit_crp.rules import Mask
 
 attrResult = namedtuple(
     "AttributionResults", "heatmap, activations, relevances, prediction"
@@ -29,6 +29,11 @@ class ConditionalGradient(Gradient):
     model: :py:obj:`torch.nn.Module`
         The model for which the attribution will be computed. If `composite` is provided, this will also be the model
         to which the composite will be registered within `with` statements, or when calling the `Attributor` instance.
+    conditions: list[dict[str, list[int]]]
+        Dict keys are module names, dict values are lists of concept (a.k.a. channel, neuron) indices to be conditioned on.
+    exclude_parallel: bool, optional
+        If True, the PyTorch gradient flow is restricted so that it does not enter into parallel layers
+        of the layers mentioned in the 'conditions' dictionary.
     composite: :py:obj:`zennit.core.Composite`, optional
         The optional composite to, if provided, be registered to the model within `with` statements or when calling the
         `Attributor` instance.
@@ -42,20 +47,20 @@ class ConditionalGradient(Gradient):
     retain_graph: bool, optional
         Specify whether to use ``retain_graph=True`` (default is the value of create_graph) to compute the gradient
         with :py:obj:`torch.autograd.grad`.
-    exclude_parallel: bool, optional
-        If True, the PyTorch gradient flow is restricted so that it does not enter into parallel layers
-        of the layers mentioned in the 'conditions' dictionary.
     """
 
     def __init__(
         self,
         model,
+        conditions,
+        exclude_parallel=False,
         composite=None,
         attr_output=None,
         create_graph=False,
         retain_graph=None,
-        exclude_parallel=False,
     ):
+        self.conditions = conditions
+        self.exclude_parallel = exclude_parallel
         super().__init__(
             model=model,
             composite=composite,
@@ -63,7 +68,6 @@ class ConditionalGradient(Gradient):
             create_graph=create_graph,
             retain_graph=retain_graph,
         )
-        self.exclude_parallel = exclude_parallel
 
     def grad(self, input, attr_output_fn):
         """Compute the gradient of the model wrt. input, by using ``attr_output_fn`` as the function of the model
@@ -498,7 +502,7 @@ class CondAttribution:
                     y_targets.append(indices)
                 else:
                     if l_name not in hook_map:
-                        hook_map[l_name] = MaskHook([])
+                        hook_map[l_name] = Mask([])
                     self._register_mask_fn(
                         hook_map[l_name], mask_map, i, indices, l_name
                     )
@@ -596,7 +600,7 @@ class CondAttribution:
         for cond in conditions:
             for l_name in cond.keys():
                 if l_name not in hook_map:
-                    hook_map[l_name] = MaskHook([])
+                    hook_map[l_name] = Mask([])
                 if l_name != self.MODEL_OUTPUT_NAME and l_name not in cond_l_names:
                     cond_l_names.append(l_name)
 
