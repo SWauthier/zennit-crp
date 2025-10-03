@@ -1,3 +1,5 @@
+"""Attributors are convenience objects to compute attributions, optionally using composites."""
+
 import math
 import warnings
 from collections import namedtuple
@@ -52,15 +54,12 @@ class ConditionalGradient(Gradient):
     def __init__(
         self,
         model,
-        conditions,
-        exclude_parallel=False,
         composite=None,
         attr_output=None,
         create_graph=False,
         retain_graph=None,
+        exclude_parallel=False,
     ):
-        self.conditions = conditions
-        self.exclude_parallel = exclude_parallel
         super().__init__(
             model=model,
             composite=composite,
@@ -68,6 +67,7 @@ class ConditionalGradient(Gradient):
             create_graph=create_graph,
             retain_graph=retain_graph,
         )
+        self.exclude_parallel = exclude_parallel
 
     def grad(self, input, attr_output_fn):
         """Compute the gradient of the model wrt. input, by using ``attr_output_fn`` as the function of the model
@@ -218,7 +218,7 @@ class CondAttribution:
                 outputs, grad_outputs.to(outputs), retain_graph=generate
             )
 
-    # DONE: will be done externally
+    # TODO: handle in script
     def relevance_init(self, prediction, target_list, init_rel):
         """
 
@@ -253,7 +253,7 @@ class CondAttribution:
 
         return output_selection.to(prediction)
 
-    # DONE: will be done externally
+    # TODO: handle in script
     def heatmap_modifier(self, inputs, on_device=None):
         heatmap = inputs.grad.detach()
         heatmap = heatmap.to(on_device) if on_device else heatmap
@@ -315,7 +315,7 @@ class CondAttribution:
                         " same layer names. (This limitation does not apply to the __call__ method)"
                     )
 
-    # DONE
+    # DONE: implemented in composites
     def _register_mask_fn(self, hook, mask_map, b_index, c_indices, l_name):
         if callable(mask_map):
             mask_fn = mask_map(b_index, c_indices, l_name)
@@ -326,7 +326,7 @@ class CondAttribution:
 
         hook.masks.append(mask_fn)
 
-    # TODO: implement somewhere (see _conditions_wrapper)
+    # TODO: handle in script
     def __call__(
         self,
         data: torch.Tensor,
@@ -416,7 +416,7 @@ class CondAttribution:
                 False,
             )
 
-    # TODO: implement somewhere
+    # TODO: handle in script
     def _conditions_wrapper(self, *args):
         """
         Since 'exclude_parallel'=True requires that the condition set contains only the same layer names,
@@ -454,7 +454,7 @@ class CondAttribution:
 
         return attrResult(heatmap, activations, relevances, prediction)
 
-    # TODO: implement somewhere (see _conditions_wrapper)
+    # DONE: implemented in conditions.py file as partition_conditions
     def _separate_conditions(self, conditions):
         """
         Finds identical subsets of layer names inside 'conditions'
@@ -700,7 +700,7 @@ class CondAttribution:
         if verbose:
             pbar.close()
 
-    # DONE: will be done externally (see _append_recording_layer_hooks)
+    # TODO: handle in script (see _append_recording_layer_hooks)
     @staticmethod
     def _generate_hook(layer_name, layer_out):
         def get_tensor_hook(module, input, output):
@@ -709,7 +709,7 @@ class CondAttribution:
 
         return get_tensor_hook
 
-    # DONE: will be done externally
+    # TODO: handle in script
     def _append_recording_layer_hooks(
         self, modules_to_record, start_module, modules_to_condition
     ):
@@ -756,7 +756,7 @@ class CondAttribution:
 
         return handles, recorded_modules
 
-    # DONE: will be done externally
+    # TODO: handle in script
     def _collect_hook_activation_relevance(
         self, recorded_modules, on_device=None, length=None
     ):
@@ -790,6 +790,7 @@ class CondAttribution:
 
         return activations, relevances
 
+    # TODO: figure this out (see generate method)
     def _reset_gradients(self, data):
         """
         custom zero_grad() function

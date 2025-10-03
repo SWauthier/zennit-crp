@@ -74,7 +74,7 @@ class ChannelConcept:
             end = np.prod(output_shape[1:])
             return np.arange(0, end)
 
-    # unused?
+    # used to get attributions from relevances of a certain module
     def attribute(self, relevance, mask=None, layer_name=None, abs_norm=True):
         if isinstance(mask, torch.Tensor):
             relevance = relevance * mask

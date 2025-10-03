@@ -1,3 +1,5 @@
+"""Rules based on Hooks"""
+
 import functools
 import weakref
 
@@ -12,7 +14,7 @@ class Mask(Hook):
         if masks is None:
             masks = [self._default_mask]
         self.masks = masks
-    
+
     def pre_backward(self, module, grad_input, grad_output):
         """Hook applied during backward-pass"""
         masked_grad_output = grad_output[0].clone()

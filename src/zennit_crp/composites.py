@@ -1,3 +1,5 @@
+"""Composites, registered in a global composite dict."""
+
 import torch
 from zennit.composites import NameMapComposite, register_composite
 from zennit.core import Composite
@@ -9,7 +11,7 @@ from zennit_crp.rules import Mask
 class MaskComposite(NameMapComposite):
     """Composite that applies a mask to the gradients at specified layers.
     Each condition corresponds to a batch.
-    
+
     Parameters
     ----------
     conditions: list of dict
