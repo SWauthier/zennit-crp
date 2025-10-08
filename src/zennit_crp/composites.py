@@ -27,8 +27,6 @@ class MaskComposite(NameMapComposite):
         List of canonizer instances to be applied before applying hooks.
     """
 
-    MODEL_OUTPUT_NAME = "y"
-
     def __init__(self, conditions, mask_map=None, name_map=None, canonizers=None):
         if mask_map is None:
             mask_map = self._default_mask
@@ -36,17 +34,19 @@ class MaskComposite(NameMapComposite):
             name_map = []
 
         hook_map = {}
+        masked_modules = set()
         for i, condition in enumerate(conditions):
             for module_name, concept_ids in condition.items():
-                if module_name != self.MODEL_OUTPUT_NAME:
-                    if module_name not in hook_map:
-                        hook_map[module_name] = Mask([])
-                    mask_fn = self._mask_fn(mask_map, i, concept_ids, module_name)
-                    hook_map[module_name].masks.append(mask_fn)
+                if module_name not in hook_map:
+                    hook_map[module_name] = Mask([])
+                mask_fn = self._mask_fn(mask_map, i, concept_ids, module_name)
+                hook_map[module_name].masks.append(mask_fn)
+                masked_modules.add(module_name)
 
         name_map = name_map + [([name], hook) for name, hook in hook_map.items()]
 
         super().__init__(name_map=name_map, canonizers=canonizers)
+        self.masked_modules = masked_modules
 
     @staticmethod
     def _mask_fn(mask_map, batch_id, concept_ids, module_name):
