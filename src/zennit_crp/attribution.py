@@ -11,9 +11,10 @@ from zennit.attribution import Gradient
 from zennit.composites import NameMapComposite
 from zennit.core import Composite, RemovableHandleList
 
+from zennit_crp.composites import Condition, MultiComposite
 from zennit_crp.concepts import ChannelConcept
 from zennit_crp.graph import ModelGraph
-from zennit_crp.rules import Mask
+from zennit_crp.rules import Mask, Store
 
 attrResult = namedtuple(
     "AttributionResults", "heatmap, activations, relevances, prediction"
@@ -54,19 +55,32 @@ class ConditionalGradient(Gradient):
     def __init__(
         self,
         model,
+        conditions,
         composite=None,
         attr_output=None,
         create_graph=False,
         retain_graph=None,
         exclude_parallel=False,
     ):
+        mask_composite = Condition(conditions)
+        name_map = [((name,), Store) for name in mask_composite.masked_modules]
+        store_composite = NameMapComposite(name_map)
+
+        # combine the composites, specifying the order of application
+        # with mask_composite listed AFTER composite, so that it is executed first during backprop
+        # register the store_hook AFTER the rule-hooks have been registered
+        # so we get the last output before the next module
+        final_composite = MultiComposite([composite, mask_composite, store_composite])
+
         super().__init__(
             model=model,
-            composite=composite,
+            composite=final_composite,
             attr_output=attr_output,
             create_graph=create_graph,
             retain_graph=retain_graph,
         )
+        self.mask_composite = mask_composite
+        self.store_composite = store_composite
         self.exclude_parallel = exclude_parallel
 
     def grad(self, input, attr_output_fn):
@@ -92,17 +106,22 @@ class ConditionalGradient(Gradient):
             input.requires_grad = True
         output = self.model(input)
         attr_output = attr_output_fn(output)
+        conditioned_modules = self.mask_composite.masked_modules
+        stored_outputs = {
+            module_name: self.model.get_submodule("encoder.7.2.conv2").output.grad
+            for module_name in self.mask_composite.masked_modules
+        }
 
-        if self.exclude_parallel and len(modules_to_condition) > 0:
-            for module_name in modules_to_condition:
-                intermediate_input = recorded_modules[module_name]
+        if self.exclude_parallel and len(conditioned_modules) > 0:
+            for module_name in conditioned_modules:
+                intermediate_input = stored_outputs[module_name]
 
                 try:
                     (gradient,) = torch.autograd.grad(
                         (output,),
                         (intermediate_input,),
                         grad_outputs=(attr_output,),
-                        retain_graph=self.retain_graph or generate,
+                        retain_graph=self.retain_graph,
                         create_graph=self.create_graph,
                     )
                 except RuntimeError as e:
@@ -123,7 +142,7 @@ class ConditionalGradient(Gradient):
             (output,),
             (input,),
             grad_outputs=(attr_output,),
-            retain_graph=self.retain_graph or generate,
+            retain_graph=self.retain_graph,
             create_graph=self.create_graph,
         )
         return output, gradient
@@ -495,11 +514,11 @@ class CondAttribution:
             inputs, conditions, start_module, exclude_parallel, init_rel
         )
 
-        hook_map, y_targets, modules_to_condition = {}, [], []
+        hook_map, target_list, modules_to_condition = {}, [], []
         for i, cond in enumerate(conditions):
             for l_name, indices in cond.items():
                 if l_name == self.MODEL_OUTPUT_NAME:
-                    y_targets.append(indices)
+                    target_list.append(indices)
                 else:
                     if l_name not in hook_map:
                         hook_map[l_name] = Mask([])
@@ -543,7 +562,7 @@ class CondAttribution:
             else:
                 prediction = modified(inputs)
                 init_relevance = self.relevance_init(
-                    prediction.detach().clone(), y_targets, init_rel
+                    prediction.detach().clone(), target_list, init_rel
                 )
                 self.backward(
                     prediction,

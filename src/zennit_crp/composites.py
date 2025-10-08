@@ -7,8 +7,8 @@ from zennit.core import Composite
 from zennit_crp.rules import Mask
 
 
-@register_composite("mask")
-class MaskComposite(NameMapComposite):
+@register_composite("condition")
+class Condition(NameMapComposite):
     """Composite that applies a mask to the gradients at specified layers.
     Each condition corresponds to a batch.
 
