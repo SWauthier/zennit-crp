@@ -40,6 +40,19 @@ class Mask(Hook):
         return obj
 
 
+class Store(Hook):
+    """Store hooks for storing intermediate results."""
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, module, args, kwargs, output):
+        # set the current module's attribute 'output' to the its tensor
+        module.output = output
+        # keep the output tensor gradient, even if it is not a leaf-tensor
+        output.retain_grad()
+
+
 class FeatVisHook:
     """Feature Visualization hooks for reference sampling inside forward and backward passes."""
 
