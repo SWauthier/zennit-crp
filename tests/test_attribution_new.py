@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from zennit.composites import EpsilonPlus
 
-from zennit_crp.attribution import CondAttribution
+from zennit_crp.attribution import ConditionalGradient
 from zennit_crp.helper import get_layer_names
 
 
@@ -34,17 +34,11 @@ class SimpleModel(nn.Module):
         return self.layer3(y3)
 
 
-class OneDimCondAttribution(CondAttribution):
-    def heatmap_modifier(self, inputs, on_device=None):
-        heatmap = inputs.grad.detach()
-        heatmap = heatmap.to(on_device) if on_device else heatmap
-        return heatmap
-
-
 @pytest.fixture
 def simple_cond_attribution():
     model = SimpleModel()
-    return model, OneDimCondAttribution(model)
+    attributor = ConditionalGradient(model)
+    return model, attributor
 
 
 def test_simple_attribution(simple_cond_attribution):
