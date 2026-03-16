@@ -1,303 +1,217 @@
-from typing import List
+"""Model graph tracing for determining layer connectivity.
+
+Uses :py:func:`torch.jit.trace` to discover how ``nn.Module`` layers connect
+to each other, enabling :py:class:`~zennit_crp.attribution.AttributionGraph`
+to walk the model's computational graph.
+"""
+
+from __future__ import annotations
 
 import torch
 
 
 class GraphNode:
-    """
-    Contains meta information about a node in a PyTorch jit graph
+    """Node in the traced model graph.
+
+    Parameters
+    ----------
+    node : torch.jit.Node
+        A node from the JIT inlined graph.
     """
 
     def __init__(self, node):
-        self.id = node.__repr__()
-        self.scopeName = node.scopeName()
+        self.id = repr(node)
+        self.scope_name = node.scopeName() or node.kind()
 
-        if len(self.scopeName) == 0:
-            self.scopeName = node.kind()
-
-        self.output_nodes = []
-        self.input_nodes = []
-        self.is_layer = False
-        self.input_layers = []
-
-        if "aten" in node.kind():
-            self.layer_name = self.scopeName.split("__module.")[-1]
-            self.is_layer = True
+        self.output_nodes: list[GraphNode] = []
+        self.input_nodes: list[GraphNode] = []
+        self.is_layer = "aten" in node.kind()
+        self.input_layers: list[str] = []
+        self.layer_name = self.scope_name.split("__module.")[-1] if self.is_layer else ""
 
 
 class ModelGraph:
-    """
-    This class contains meta information about layer connections inside the PyTorch model.
+    """Graph describing how layers in a PyTorch model are connected.
 
-    Use `find_input_layers` method to get the input layers of a specific nn.Module
+    Use :py:meth:`find_input_layers` to discover which layers feed into a
+    given layer.
+
+    Parameters
+    ----------
+    input_nodes : list
+        Starting nodes of the JIT graph.
     """
 
     def __init__(self, input_nodes):
-        self.id_node_map = {}
-        self.layer_node_map = {}
+        self._id_node_map: dict[str, GraphNode] = {}
+        self._layer_node_map: dict[str, GraphNode] = {}
+        self.layer_names: list[str] = []
 
         for node in input_nodes:
             self._add_node(node)
 
-    def _add_node(self, node):
-        """
-        Add node to intern dictionaries
-        """
+    def _add_node(self, node) -> GraphNode:
+        node_id = repr(node)
+        if node_id not in self._id_node_map:
+            graph_node = GraphNode(node)
+            self._id_node_map[node_id] = graph_node
+            if graph_node.is_layer:
+                self._layer_node_map[graph_node.layer_name] = graph_node
+        return self._id_node_map[node_id]
 
-        node_id = node.__repr__()
-        if node_id not in self.id_node_map:
-            node_obj = GraphNode(node)
-            self.id_node_map[node_id] = node_obj
+    def _add_connection(self, in_node, out_node) -> bool:
+        node_in = self._add_node(in_node)
+        node_out = self._add_node(out_node)
 
-            if node_obj.is_layer:
-                self.layer_node_map[node_obj.layer_name] = node_obj
+        new = False
+        if node_in not in node_out.input_nodes:
+            node_out.input_nodes.append(node_in)
+            new = True
+        if node_out not in node_in.output_nodes:
+            node_in.output_nodes.append(node_out)
+            new = True
+        return new
 
-        return self.id_node_map[node_id]
-
-    def _add_connection(self, in_node, out_node):
-        """
-        Add an entry for the connection between input_node and end_node
-        """
-        layer_node_in = self._add_node(in_node)
-        layer_node_out = self._add_node(out_node)
-
-        new_connection = False
-
-        if layer_node_in not in layer_node_out.input_nodes:
-            layer_node_out.input_nodes.append(layer_node_in)
-            new_connection = True
-        if layer_node_out not in layer_node_in.output_nodes:
-            layer_node_in.output_nodes.append(layer_node_out)
-            new_connection = True
-
-        return new_connection
-
-    def set_layer_names(self, layer_names: list):
+    def set_layer_names(self, layer_names: list[str]):
+        """Set the available layer names and pre-cache their input layers."""
         self.layer_names = layer_names
         for name in layer_names:
-            # cache results
             self.find_input_layers(name)
 
-    def find_input_layers(self, layer_name: str) -> List:
-        """
-        Returns all layer names that are connected to the input of `layer_name`.
-        The method returns only layers, that were supplied as `layer_names` argument
-        to the `trace_model_graph` function. If you wish to change available layers,
-        please modify the self.layer_names attribute.
+    def find_input_layers(self, layer_name: str) -> list[str]:
+        """Return layer names connected to the input of ``layer_name``.
 
-        Parameters:
+        Only layers present in :py:attr:`layer_names` are returned.
+
+        Parameters
         ----------
-        layer_name: str
-            name of torch.nn.Module
+        layer_name : str
+            Name of the ``nn.Module`` to query.
+
+        Returns
+        -------
+        list[str]
+            Input layer names.
+
+        Raises
+        ------
+        KeyError
+            If ``layer_name`` is not in the traced graph.
         """
+        if layer_name not in self._layer_node_map:
+            raise KeyError(f"Layer '{layer_name}' not found in graph.")
 
-        if layer_name not in self.layer_node_map:
-            raise KeyError(f"{layer_name} does not exist")
+        root = self._layer_node_map[layer_name]
+        if not root.input_layers:
+            root.input_layers = self._search_inputs(root)
+        return root.input_layers
 
-        root_node = self.layer_node_map[layer_name]
-
-        if len(root_node.input_layers) == 0:
-            # cache results
-            layers = self._recursive_search(root_node)
-            root_node.input_layers = layers
-            return layers
-
-        else:
-            return root_node.input_layers
-
-    def _recursive_search(self, node_obj):
-        found_layers = []
-        for g_node in node_obj.input_nodes:
-            if g_node.is_layer and g_node.layer_name in self.layer_names:
-                found_layers.append(g_node.layer_name)
-
+    def _search_inputs(self, node: GraphNode) -> list[str]:
+        found: list[str] = []
+        for inp in node.input_nodes:
+            if inp.is_layer and inp.layer_name in self.layer_names:
+                found.append(inp.layer_name)
             else:
-                found_layers.extend(self._recursive_search(g_node))
+                found.extend(self._search_inputs(inp))
+        return found
 
-        return found_layers
-
-    def __str__(self):
-        model_string = ""
-
-        for layer in self.id_node_map.values():
-            model_string += layer.scopeName + " -> "
-            for next_l in layer.output_nodes:
-                model_string += next_l.scopeName + ", "
-
-            if len(layer.output_nodes) == 0:
-                model_string += " end"
-            else:
-                model_string += "\n"
-
-        return model_string
+    def __str__(self) -> str:
+        lines = []
+        for node in self._id_node_map.values():
+            targets = ", ".join(n.scope_name for n in node.output_nodes) or "end"
+            lines.append(f"{node.scope_name} -> {targets}")
+        return "\n".join(lines)
 
 
 def trace_model_graph(
-    model, sample: torch.Tensor, layer_names: List[str], debug=False
+    model: torch.nn.Module,
+    sample: torch.Tensor,
+    layer_names: list[str],
 ) -> ModelGraph:
-    """ "
-    As pytorch does not trace the model structure like tensorflow, we need to do it ourselves.
-    Thus, this function generates a model graph - a summary - how all nn.Module are connected with each other.
+    """Trace the model and build a layer connectivity graph.
 
-    Parameters:
+    Uses :py:func:`torch.jit.trace` to record tensor flow through the model,
+    then constructs a :py:class:`ModelGraph` summarizing how named modules
+    connect to each other.
+
+    Parameters
     ----------
-        model: torch.nn.Module
-        sample: torch.Tensor
-            An examplary input. Used to trace the model with torch.jit.trace
-        layer_names: list of strings
-            List of all layer names that should be accessible in the model graph summary
-        debug: boolean
-            If True, returns the tarced inlined_graph of torch.jit
+    model : torch.nn.Module
+        The model to trace.
+    sample : torch.Tensor
+        An example input tensor for tracing.
+    layer_names : list[str]
+        Layer names to include in the graph.
 
-    Returns:
+    Returns
     -------
-    ModelGraph: obj
-        Object that contains meta information about the connection of modules.
-        Use the `find_input_layers` method to get the input layers of a specific nn.Module.
-
+    ModelGraph
+        Graph object with connectivity information.
     """
-
-    # we use torch.jit to record the connections of all tensors
     traced = torch.jit.trace(model, (sample,), check_trace=False)
-    # inlined_graph returns a suitable presentation of the traced model
     graph = traced.inlined_graph
 
-    if debug is True:
-        dump_pytorch_graph(graph)
+    node_inputs, node_outputs = _collect_node_ios(graph)
+    input_nodes = _find_input_nodes(graph, node_inputs, node_outputs)
 
-    """
-    We search for all input nodes where we could start a recursive travers through the network graph.
-    First, we concatenate all input and output tensor ids for each node as they are spread out in the original
-    torch.jit representation. Then, we search for a node with input tensors that have no connection to the output
-    of another node. This node is an input node per definition.
-    """
-    node_inputs, node_outputs = _collect_node_inputs_and_outputs(graph)
-    input_nodes = _get_input_nodes(graph, node_inputs, node_outputs)
+    mg = ModelGraph(input_nodes)
 
-    # initialize a model representation where we save the results
-    MG = ModelGraph(input_nodes)
-
-    # start recursive decoding of torch.jit graph
     for node in input_nodes:
-        _build_graph_recursive(MG, graph, node)
+        _build_recursive(mg, graph, node)
 
-    MG.set_layer_names(layer_names)
+    mg.set_layer_names(layer_names)
 
-    # explicitly free gpu ram
     del traced, graph
+    return mg
 
-    return MG
 
-
-def _build_graph_recursive(MG: ModelGraph, graph, in_node):
-    """
-    Recursive function traverses the graph constructed by torch.jit.trace
-    and records the graph structure inside our ModelGraph class
-    """
-
-    node_outputs = [i.unique() for i in in_node.outputs()]
-    next_nodes = _find_next_nodes(graph, node_outputs)
-
-    if len(next_nodes) == 0:
-        return
+def _build_recursive(mg: ModelGraph, graph, in_node):
+    """Recursively traverse the JIT graph and record connections."""
+    outputs = [o.unique() for o in in_node.outputs()]
+    next_nodes = _find_next_nodes(graph, outputs)
 
     for node in next_nodes:
-        new_connection = MG._add_connection(in_node, node)
-
-        if new_connection:
-            _build_graph_recursive(MG, graph, node)
-        else:
-            return
+        if mg._add_connection(in_node, node):
+            _build_recursive(mg, graph, node)
 
 
-def _find_next_nodes(graph, node_outputs):
-    """
-    Helper function for build_graph_recursive.
-    """
+def _find_next_nodes(graph, output_ids: list) -> list:
+    """Find nodes whose inputs overlap with the given output IDs."""
+    result = []
+    output_set = set(output_ids)
+    for node in graph.nodes():
+        inputs = {i.unique() for i in node.inputs()}
+        if inputs & output_set:
+            result.append(node)
+    return result
 
-    next_nodes = []
+
+def _collect_node_ios(graph) -> tuple[dict, dict]:
+    """Collect input/output tensor IDs per scope name."""
+    inputs: dict[str, list] = {}
+    outputs: dict[str, list] = {}
 
     for node in graph.nodes():
-        node_inputs = [i.unique() for i in node.inputs()]
-        if set(node_inputs) & set(node_outputs):
-            next_nodes.append(node)
-
-    return next_nodes
-
-
-def _collect_node_inputs_and_outputs(graph):
-    """
-    Helper function to get all tensor ids of the input and output of each node.
-    Used to retrieve the input layers of the model.
-    """
-
-    layer_inputs = {}
-    layer_outputs = {}
-
-    for node in graph.nodes():
-        # "aten" nodes are torch.nn.Modules
         if "aten" in node.kind():
             name = node.scopeName()
+            if name not in inputs:
+                inputs[name] = []
+                outputs[name] = []
+            inputs[name].extend(i.unique() for i in node.inputs())
+            outputs[name].extend(o.unique() for o in node.outputs())
 
-            if name not in layer_inputs:
-                layer_inputs[name] = []
-                layer_outputs[name] = []
-
-            [layer_inputs[name].append(i.unique()) for i in node.inputs()]
-            [layer_outputs[name].append(i.unique()) for i in node.outputs()]
-
-    return layer_inputs, layer_outputs
+    return inputs, outputs
 
 
-def _get_input_nodes(graph, layer_inputs: dict, layer_outputs: dict):
-    """
-    Returns input nodes of jit graph.
-    Used to retrieve the input layers of the model.
-    """
-
-    input_nodes = []
+def _find_input_nodes(graph, node_inputs: dict, node_outputs: dict) -> list:
+    """Find graph nodes with no incoming connections from other modules."""
+    result = []
+    all_outputs = {uid for ids in node_outputs.values() for uid in ids}
 
     for node in graph.nodes():
-        # "aten" describes all real layers
         if "aten" in node.kind():
             name = node.scopeName()
+            if not set(node_inputs[name]) & all_outputs:
+                result.append(node)
 
-            node_inputs = layer_inputs[name]
-            # if its inputs are not ourputs of other modules -> an input node
-            if not _find_overlap_with_output(node_inputs, layer_outputs):
-                input_nodes.append(node)
-
-    return input_nodes
-
-
-def _find_overlap_with_output(node_inputs: list, layer_outputs: dict):
-    """
-    More efficient version of _find_next_nodes.
-    """
-
-    for name in layer_outputs:
-        node_outputs = layer_outputs[name]
-        if set(node_inputs) & set(node_outputs):
-            # if overlap, no input node
-            return True
-
-    return False
-
-
-def dump_pytorch_graph(graph):
-    """
-    List all the nodes in a PyTorch jit graph.
-    Source: https://github.com/waleedka/hiddenlayer/blob/master/hiddenlayer/pytorch_builder.py
-    """
-
-    f = "{:25} {:40}   {} -> {}"
-    print(f.format("kind", "scopeName", "inputs", "outputs"))
-    for node in graph.nodes():
-        print(
-            f.format(
-                node.kind(),
-                node.scopeName(),
-                [i.unique() for i in node.inputs()],
-                [i.unique() for i in node.outputs()],
-            )
-        )
+    return result

@@ -1,118 +1,226 @@
-import numpy as np
+"""Concept definitions for Concept Relevance Propagation.
+
+Concepts define how relevance is attributed to interpretable units within a layer.
+The default implementation treats each channel as a separate concept.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
 import torch
 
 
-class ChannelConcept:
-    """
-    Concept Class for torch.nn.Conv2D and torch.nn.Linear layers
+@runtime_checkable
+class Concept(Protocol):
+    """Protocol for concept implementations.
+
+    A concept defines how to mask gradients for conditional attribution,
+    how to attribute relevance to individual concepts, and how to sample
+    reference examples.
     """
 
     @staticmethod
-    def mask(batch_id: int, concept_ids: list, layer_name=None):
-        """
-        Wrapper that generates a function thath modifies the gradient (replaced by zennit by attributions).
+    def mask(batch_id: int, concept_ids: list[int]) -> callable:
+        """Create a gradient mask function for the given concepts.
 
-        Parameters:
+        Parameters
         ----------
-        batch_id: int
-            Specifies the batch dimension in the torch.Tensor.
-        concept_ids: list of integer values
-            integer lists corresponding to channel indices.
+        batch_id : int
+            Index in the batch dimension.
+        concept_ids : list[int]
+            Channel/neuron indices to condition on.
 
-        Returns:
-        --------
-        callable function that modifies the gradient
+        Returns
+        -------
+        callable
+            Function ``(grad: torch.Tensor) -> torch.Tensor`` that masks the gradient.
         """
+        ...
 
-        def mask_fct(grad):
-            mask = torch.zeros_like(grad[batch_id])
-            mask[concept_ids] = 1
-            masked_tensor = grad.clone()
-            masked_tensor[batch_id] = mask * masked_tensor[batch_id]
-            return masked_tensor
+    def attribute(self, relevance: torch.Tensor, abs_norm: bool = True) -> torch.Tensor:
+        """Compute per-concept attribution from a relevance tensor.
 
-        return mask_fct
-
-    @staticmethod
-    def mask_rf(batch_id: int, c_n_map: dict[int, list], layer_name=None):
-        """
-        Wrapper that generates a function that modifies the gradient (replaced by zennit by attributions) for a single neuron.
-
-        Parameters:
+        Parameters
         ----------
-        batch_id: int
-            Specifies the batch dimension in the torch.Tensor.
-        c_n_map: dist with int keys and list values
-            Keys correspond to channel indices and values correspond to neuron indices.
-            Neuron Indices are counted as if the 2D Channel has 1D dimension i.e. channel dimension [3, 20, 20] -> [3, 400],
-            so that neuron indices range between 0 and 399.
+        relevance : torch.Tensor
+            Relevance tensor of shape ``(batch, channels, *spatial)``.
+        abs_norm : bool, optional
+            Whether to normalize by absolute sum. Default is ``True``.
 
-        Returns:
-        --------
-        callable function that modifies the gradient
+        Returns
+        -------
+        torch.Tensor
+            Per-concept attribution of shape ``(batch, channels)``.
         """
-
-        def mask_fct(grad):
-            grad_shape = grad.shape
-            grad = grad.view(*grad_shape[:2], -1)
-
-            mask = torch.zeros_like(grad[batch_id])
-
-            for channel in c_n_map:
-                mask[channel, c_n_map[channel]] = 1
-
-            grad[batch_id] = grad[batch_id] * mask
-            return grad.view(grad_shape)
-
-        return mask_fct
-
-    # unused?
-    def get_rf_indices(self, output_shape, layer_name=None):
-        if len(output_shape) == 1:
-            return [0]
-        else:
-            end = np.prod(output_shape[1:])
-            return np.arange(0, end)
-
-    # used to get attributions from relevances of a certain module
-    def attribute(self, relevance, mask=None, layer_name=None, abs_norm=True):
-        if isinstance(mask, torch.Tensor):
-            relevance = relevance * mask
-
-        rel_l = torch.sum(relevance.view(*relevance.shape[:2], -1), dim=-1)
-
-        if abs_norm:
-            rel_l = rel_l / (torch.abs(rel_l).sum(-1).view(-1, 1) + 1e-10)
-
-        return rel_l
+        ...
 
     def reference_sampling(
-        self, relevance, layer_name=None, max_target: str = "sum", abs_norm=True
-    ):
+        self, relevance: torch.Tensor, max_target: str = "sum", abs_norm: bool = True
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample references based on relevance.
+
+        Parameters
+        ----------
+        relevance : torch.Tensor
+            Relevance tensor of shape ``(batch, channels, *spatial)``.
+        max_target : str, optional
+            Aggregation mode, either ``"sum"`` or ``"max"``. Default is ``"sum"``.
+        abs_norm : bool, optional
+            Whether to normalize by absolute sum. Default is ``True``.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+            Batch-sorted indices, relevance values, and receptive field neuron indices.
         """
-        Parameters:
-            max_target: str. Either 'sum' or 'max'.
+        ...
+
+
+class ChannelConcept:
+    """Concept implementation treating each channel as a separate concept.
+
+    Suitable for :py:class:`torch.nn.Conv2d` and :py:class:`torch.nn.Linear` layers.
+    Each output channel (or neuron in linear layers) is considered an individual concept.
+    """
+
+    @staticmethod
+    def mask(batch_id: int, concept_ids: list[int]) -> callable:
+        """Create a gradient mask that zeros out all but the specified channels.
+
+        Parameters
+        ----------
+        batch_id : int
+            Index in the batch dimension.
+        concept_ids : list[int]
+            Channel indices to keep. All other channels are zeroed.
+
+        Returns
+        -------
+        callable
+            Mask function ``(grad: torch.Tensor) -> torch.Tensor``.
         """
 
-        # position of receptive field neuron
-        rel_l = relevance.view(*relevance.shape[:2], -1)
-        rf_neuron = torch.argmax(rel_l, dim=-1)
+        def mask_fn(grad: torch.Tensor) -> torch.Tensor:
+            mask = torch.zeros_like(grad[batch_id])
+            mask[concept_ids] = 1
+            masked = grad.clone()
+            masked[batch_id] = mask * masked[batch_id]
+            return masked
 
-        # channel maximization target
-        if max_target == "sum":
-            rel_l = torch.sum(relevance.view(*relevance.shape[:2], -1), dim=-1)
+        return mask_fn
 
-        elif max_target == "max":
-            rel_l = torch.gather(rel_l, -1, rf_neuron.unsqueeze(-1)).squeeze(-1)
+    @staticmethod
+    def mask_rf(batch_id: int, channel_neuron_map: dict[int, list[int]]) -> callable:
+        """Create a gradient mask for specific neurons within channels (receptive field).
 
-        else:
-            raise ValueError("'max_target' supports only 'max' or 'sum'.")
+        Parameters
+        ----------
+        batch_id : int
+            Index in the batch dimension.
+        channel_neuron_map : dict[int, list[int]]
+            Mapping from channel indices to lists of spatial neuron indices.
+            Neuron indices are linearized, e.g. shape ``(C, H, W)`` -> ``(C, H*W)``.
+
+        Returns
+        -------
+        callable
+            Mask function ``(grad: torch.Tensor) -> torch.Tensor``.
+        """
+
+        def mask_fn(grad: torch.Tensor) -> torch.Tensor:
+            original_shape = grad.shape
+            grad = grad.view(*original_shape[:2], -1)
+            mask = torch.zeros_like(grad[batch_id])
+            for channel, neurons in channel_neuron_map.items():
+                mask[channel, neurons] = 1
+            grad[batch_id] = grad[batch_id] * mask
+            return grad.view(original_shape)
+
+        return mask_fn
+
+    @staticmethod
+    def attribute(
+        relevance: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        abs_norm: bool = True,
+    ) -> torch.Tensor:
+        """Compute per-channel relevance attribution.
+
+        Sums relevance over spatial dimensions and optionally normalizes.
+
+        Parameters
+        ----------
+        relevance : torch.Tensor
+            Relevance tensor of shape ``(batch, channels, *spatial)``.
+        mask : torch.Tensor, optional
+            Optional mask to apply before attribution.
+        abs_norm : bool, optional
+            If ``True``, normalize by the sum of absolute relevances. Default is ``True``.
+
+        Returns
+        -------
+        torch.Tensor
+            Per-channel attribution of shape ``(batch, channels)``.
+        """
+        if mask is not None:
+            relevance = relevance * mask
+
+        # Sum over spatial dimensions: (batch, channels, *spatial) -> (batch, channels)
+        rel_c = torch.sum(relevance.view(*relevance.shape[:2], -1), dim=-1)
 
         if abs_norm:
-            rel_l = rel_l / (torch.abs(rel_l).sum(-1).view(-1, 1) + 1e-10)
+            rel_c = rel_c / (torch.abs(rel_c).sum(-1, keepdim=True) + 1e-10)
 
-        d_ch_sorted = torch.argsort(rel_l, dim=0, descending=True)
-        rel_ch_sorted = torch.gather(rel_l, 0, d_ch_sorted)
-        rf_ch_sorted = torch.gather(rf_neuron, 0, d_ch_sorted)
+        return rel_c
 
-        return d_ch_sorted, rel_ch_sorted, rf_ch_sorted
+    @staticmethod
+    def reference_sampling(
+        relevance: torch.Tensor,
+        max_target: str = "sum",
+        abs_norm: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Find the most relevant samples and neurons per channel.
+
+        Parameters
+        ----------
+        relevance : torch.Tensor
+            Relevance tensor of shape ``(batch, channels, *spatial)``.
+        max_target : str, optional
+            ``"sum"`` to rank by total channel relevance,
+            ``"max"`` to rank by peak neuron relevance. Default is ``"sum"``.
+        abs_norm : bool, optional
+            If ``True``, normalize by absolute sum. Default is ``True``.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+            - ``b_sorted``: Batch indices sorted by relevance per channel.
+            - ``rel_sorted``: Corresponding relevance values.
+            - ``rf_sorted``: Receptive field neuron indices (argmax within each channel).
+        """
+        # Flatten spatial dims: (batch, channels, *spatial) -> (batch, channels, neurons)
+        rel_flat = relevance.view(*relevance.shape[:2], -1)
+
+        # Receptive field: most relevant neuron per channel
+        rf_neuron = torch.argmax(rel_flat, dim=-1)
+
+        # Per-channel relevance
+        match max_target:
+            case "sum":
+                rel_c = torch.sum(rel_flat, dim=-1)
+            case "max":
+                rel_c = torch.max(rel_flat, dim=-1).values
+            case _:
+                raise ValueError(f"max_target must be 'sum' or 'max', got '{max_target}'")
+
+        if abs_norm:
+            rel_c = rel_c / (torch.abs(rel_c).sum(-1, keepdim=True) + 1e-10)
+
+        # Sort batch indices by relevance for each channel
+        b_sorted = torch.argsort(rel_c, dim=0, descending=True)
+
+        rel_sorted = torch.gather(rel_c, 0, b_sorted)
+        rf_sorted = torch.gather(rf_neuron, 0, b_sorted)
+
+        return b_sorted, rel_sorted, rf_sorted

@@ -1,151 +1,192 @@
-import os
+"""Helper utilities for zennit-crp.
+
+Provides functions for layer introspection, normalization, and loading
+precomputed feature visualization results from disk.
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
 import torch
 
 
-def get_layer_names(model: torch.nn.Module, types: list):
-    """
-    Retrieves the layer names of all layers that belong to a torch.nn.Module type defined
-    in 'types'.
+def get_layer_names(model: torch.nn.Module, types: list[type]) -> list[str]:
+    """Retrieve names of all layers matching the given types.
 
     Parameters
     ----------
-    model: torch.nn.Module
-    types: list of torch.nn.Module
-        Layer types i.e. torch.nn.Conv2D
+    model : torch.nn.Module
+        The model to inspect.
+    types : list[type]
+        Layer types to match, e.g. ``[torch.nn.Conv2d, torch.nn.Linear]``.
 
     Returns
     -------
-    layer_names: list of strings
-
-
+    list[str]
+        Names of matching layers, in module traversal order.
     """
-
-    layer_names = []
-
-    for name, layer in model.named_modules():
-        for layer_definition in types:
-            if isinstance(layer, layer_definition) or issubclass(
-                layer.__class__, layer_definition
-            ):
-                if name not in layer_names:
-                    layer_names.append(name)
-
-    return layer_names
+    return [name for name, layer in model.named_modules() if any(isinstance(layer, t) for t in types)]
 
 
-def abs_norm(rel: torch.Tensor, stabilize=1e-10):
+def abs_norm(rel: torch.Tensor, eps: float = 1e-10) -> torch.Tensor:
+    """Normalize a tensor by the sum of its absolute values.
+
+    Parameters
+    ----------
+    rel : torch.Tensor
+        Input tensor.
+    eps : float, optional
+        Stabilizer to avoid division by zero.
+
+    Returns
+    -------
+    torch.Tensor
+        Normalized tensor.
     """
+    return rel / (torch.sum(torch.abs(rel)) + eps)
 
-    Parameter:
-        rel: 1-D array
+
+def max_norm(rel: torch.Tensor, eps: float = 1e-10) -> torch.Tensor:
+    """Normalize a tensor by its maximum value.
+
+    Parameters
+    ----------
+    rel : torch.Tensor
+        Input tensor.
+    eps : float, optional
+        Stabilizer to avoid division by zero.
+
+    Returns
+    -------
+    torch.Tensor
+        Normalized tensor.
     """
-
-    abs_sum = torch.sum(torch.abs(rel))
-
-    return rel / (abs_sum + stabilize)
+    return rel / (rel.max() + eps)
 
 
-def max_norm(rel, stabilize=1e-10):
-    return rel / (rel.max() + stabilize)
+def get_output_shapes(
+    model: torch.nn.Module,
+    sample: torch.Tensor,
+    record_layers: list[str],
+) -> dict[str, torch.Size]:
+    """Compute output shapes of specified layers via a forward pass.
 
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The model to inspect.
+    sample : torch.Tensor
+        An example input tensor (single sample).
+    record_layers : list[str]
+        Layer names for which to record output shapes.
 
-def get_output_shapes(model, single_sample: torch.Tensor, record_layers: list[str]):
+    Returns
+    -------
+    dict[str, torch.Size]
+        Mapping from layer names to their output shapes (excluding the batch dimension).
     """
-    calculates the output shape of each layer using a forward pass.
+    output_shapes: dict[str, torch.Size] = {}
 
-
-    """
-
-    output_shapes = {}
-
-    def generate_hook(name):
-        def shape_hook(module, input, output):
+    def make_hook(name: str):
+        def hook(module, input, output):
             output_shapes[name] = output.shape[1:]
 
-        return shape_hook
+        return hook
 
-    hooks = []
-    for name, layer in model.named_modules():
-        if name in record_layers:
-            shape_hook = generate_hook(name)
-            hooks.append(layer.register_forward_hook(shape_hook))
+    handles = [
+        layer.register_forward_hook(make_hook(name)) for name, layer in model.named_modules() if name in record_layers
+    ]
 
-    _ = model(single_sample)
+    with torch.no_grad():
+        model(sample)
 
-    [h.remove() for h in hooks]
+    for h in handles:
+        h.remove()
 
     return output_shapes
 
 
-def load_maximization(path_folder, layer_name):
-    filename = f"{layer_name}_"
+def load_maximization(path_folder: str | Path, layer_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load precomputed maximization results from disk.
 
-    d_c_sorted = np.load(Path(path_folder) / Path(filename + "data.npy"), mmap_mode="r")
-    rel_c_sorted = np.load(
-        Path(path_folder) / Path(filename + "rel.npy"), mmap_mode="r"
-    )
-    rf_c_sorted = np.load(Path(path_folder) / Path(filename + "rf.npy"), mmap_mode="r")
+    Parameters
+    ----------
+    path_folder : str or Path
+        Directory containing the result files.
+    layer_name : str
+        Name of the layer.
 
-    return d_c_sorted, rel_c_sorted, rf_c_sorted
-
-
-def load_stat_targets(path_folder):
-    targets = np.load(Path(path_folder) / Path("targets.npy")).astype(np.int32)
-
-    return targets
-
-
-def load_statistics(path_folder, layer_name, target):
-    filename = f"{target}_"
-
-    d_c_sorted = np.load(
-        Path(path_folder) / Path(layer_name) / Path(filename + "data.npy"),
-        mmap_mode="r",
-    )
-    rel_c_sorted = np.load(
-        Path(path_folder) / Path(layer_name) / Path(filename + "rel.npy"), mmap_mode="r"
-    )
-    rf_c_sorted = np.load(
-        Path(path_folder) / Path(layer_name) / Path(filename + "rf.npy"), mmap_mode="r"
-    )
-
-    return d_c_sorted, rel_c_sorted, rf_c_sorted
-
-
-def load_receptive_field(path_folder, layer_name):
-    filename = f"{layer_name}.npy"
-
-    rf_array = np.load(Path(path_folder) / Path(filename), mmap_mode="r")
-
-    return rf_array
-
-
-def find_files(path=None):
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        Data indices, relevance values, and receptive field indices (memory-mapped).
     """
-    Parameters:
-        path: path analysis results
+    folder = Path(path_folder)
+    prefix = f"{layer_name}_"
+    return (
+        np.load(folder / f"{prefix}data.npy", mmap_mode="r"),
+        np.load(folder / f"{prefix}rel.npy", mmap_mode="r"),
+        np.load(folder / f"{prefix}rf.npy", mmap_mode="r"),
+    )
 
+
+def load_stat_targets(path_folder: str | Path) -> np.ndarray:
+    """Load target array for statistics.
+
+    Parameters
+    ----------
+    path_folder : str or Path
+        Directory containing ``targets.npy``.
+
+    Returns
+    -------
+    np.ndarray
+        Integer array of targets.
     """
-    if path is None:
-        path = os.getcwd()
+    return np.load(Path(path_folder) / "targets.npy").astype(np.int32)
 
-    folders = os.listdir(path)
 
-    r_max, a_max, r_stats, a_stats, rf = [], [], [], [], []
-    for name in folders:
-        found_path = str(Path(path) / Path(name))
-        if "RelMax" in name:
-            r_max.append(found_path)
-        elif "ActMax" in name:
-            a_max.append(found_path)
-        elif "RelStats" in name:
-            r_stats.append(found_path)
-        elif "ActStats" in name:
-            a_stats.append(found_path)
-        elif "ReField" in name:
-            rf.append(found_path)
+def load_statistics(path_folder: str | Path, layer_name: str, target: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load precomputed statistics results from disk.
 
-    return r_max, a_max, r_stats, a_stats, rf
+    Parameters
+    ----------
+    path_folder : str or Path
+        Directory containing the result files.
+    layer_name : str
+        Name of the layer.
+    target : int
+        Target class index.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        Data indices, relevance values, and receptive field indices (memory-mapped).
+    """
+    folder = Path(path_folder) / layer_name
+    prefix = f"{target}_"
+    return (
+        np.load(folder / f"{prefix}data.npy", mmap_mode="r"),
+        np.load(folder / f"{prefix}rel.npy", mmap_mode="r"),
+        np.load(folder / f"{prefix}rf.npy", mmap_mode="r"),
+    )
+
+
+def load_receptive_field(path_folder: str | Path, layer_name: str) -> np.ndarray:
+    """Load a precomputed receptive field array.
+
+    Parameters
+    ----------
+    path_folder : str or Path
+        Directory containing the receptive field file.
+    layer_name : str
+        Name of the layer.
+
+    Returns
+    -------
+    np.ndarray
+        Receptive field data.
+    """
+    return np.load(Path(path_folder) / f"{layer_name}.npy")

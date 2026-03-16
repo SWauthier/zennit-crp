@@ -1,4 +1,13 @@
-from typing import Any, Dict, Iterable, Tuple, Union
+"""Image utilities for CRP visualization.
+
+Provides functions for rendering reference images with opacity masks,
+conditional heatmaps, and grid plotting.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -11,31 +20,31 @@ from torchvision.transforms.functional import gaussian_blur
 from zennit_crp.helper import max_norm
 
 
-def get_crop_range(heatmap, crop_th):
-    """
-    Returns indices in order to crop the supplied heatmap where relevance is greater than heatmap > crop_th.
+def get_crop_range(heatmap: torch.Tensor, crop_th: float) -> tuple[int, int, int, int]:
+    """Return row/column indices to crop a heatmap to its relevant region.
 
-    Parameters:
+    Parameters
     ----------
-    heatmaps: torch.Tensor
-        ouput heatmap tensor of the CondAttribution call
-    crop_th: between [0 and 1)
-        Cropping Threshold: Crops the image in regions where relevance is smaller than max(relevance)*crop_th.
-        Cropping is only applied, if receptive field 'rf' is set to True.
-    """
+    heatmap : torch.Tensor
+        2D heatmap tensor.
+    crop_th : float
+        Threshold in ``[0, 1)`` relative to max relevance.
 
+    Returns
+    -------
+    tuple[int, int, int, int]
+        ``(row_start, row_end, col_start, col_end)``.
+    """
     crop_mask = heatmap > crop_th
     rows, columns = torch.where(crop_mask)
 
     if len(rows) == 0 or len(columns) == 0:
-        # rf is empty
         return 0, -1, 0, -1
 
-    row1, row2 = rows.min(), rows.max()
-    col1, col2 = columns.min(), columns.max()
+    row1, row2 = rows.min().item(), rows.max().item()
+    col1, col2 = columns.min().item(), columns.max().item()
 
-    if (row1 >= row2) and (col1 >= col2):
-        # rf is empty
+    if row1 >= row2 and col1 >= col2:
         return 0, -1, 0, -1
 
     return row1, row2, col1, col2
@@ -43,114 +52,108 @@ def get_crop_range(heatmap, crop_th):
 
 @torch.no_grad()
 def vis_opaque_img(
-    data_batch, heatmaps, rf=False, alpha=0.3, vis_th=0.2, crop_th=0.1, kernel_size=19
-) -> Image.Image:
-    """
-    Draws reference images. The function lowers the opacity in regions with relevance lower than max(relevance)*vis_th.
-    In addition, the reference image can be cropped where relevance is less than max(relevance)*crop_th by setting 'rf' to True.
+    data_batch: torch.Tensor,
+    heatmaps: torch.Tensor,
+    rf: bool = False,
+    alpha: float = 0.3,
+    vis_th: float = 0.2,
+    crop_th: float = 0.1,
+    kernel_size: int = 19,
+) -> list[Image.Image]:
+    """Render reference images with opacity based on relevance.
 
-    Parameters:
+    Lowers opacity in regions where relevance is below ``vis_th * max(relevance)``.
+    Optionally crops to the receptive field region.
+
+    Parameters
     ----------
-    data_batch: torch.Tensor
-        original images from dataset without FeatureVisualization.preprocess() applied to it
-    heatmaps: torch.Tensor
-        ouput heatmap tensor of the CondAttribution call
-    rf: boolean
-        Computes the CRP heatmap for a single neuron and hence restricts the heatmap to the receptive field.
-        The amount of cropping is further specified by the 'crop_th' argument.
-    alpha: between [0 and 1]
-        Regulates the transparency in low relevance regions.
-    vis_th: between [0 and 1)
-        Visualization Threshold: Increases transparency in regions where relevance is smaller than max(relevance)*vis_th.
-    crop_th: between [0 and 1)
-        Cropping Threshold: Crops the image in regions where relevance is smaller than max(relevance)*crop_th.
-        Cropping is only applied, if receptive field 'rf' is set to True.
-    kernel_size: scalar
-        Parameter of the torchvision.transforms.functional.gaussian_blur function used to smooth the CRP heatmap.
+    data_batch : torch.Tensor
+        Original images (before preprocessing).
+    heatmaps : torch.Tensor
+        Attribution heatmaps.
+    rf : bool
+        If ``True``, crop images to the receptive field.
+    alpha : float
+        Transparency for low-relevance regions, in ``[0, 1]``.
+    vis_th : float
+        Visibility threshold in ``[0, 1)``.
+    crop_th : float
+        Cropping threshold in ``[0, 1)``.
+    kernel_size : int
+        Gaussian blur kernel size for smoothing heatmaps.
 
-    Returns:
-    --------
-    image: list of PIL.Image objects
-        If 'rf' is True, reference images have different shapes.
-
+    Returns
+    -------
+    list[Image.Image]
+        Rendered images.
     """
-
-    if alpha > 1 or alpha < 0:
+    if not 0 <= alpha <= 1:
         raise ValueError("'alpha' must be between [0, 1]")
-    if vis_th >= 1 or vis_th < 0:
+    if not 0 <= vis_th < 1:
         raise ValueError("'vis_th' must be between [0, 1)")
-    if crop_th >= 1 or crop_th < 0:
+    if not 0 <= crop_th < 1:
         raise ValueError("'crop_th' must be between [0, 1)")
 
     imgs = []
     for i in range(len(data_batch)):
         img = data_batch[i]
-
-        filtered_heat = max_norm(
-            gaussian_blur(heatmaps[i].unsqueeze(0), kernel_size=kernel_size)[0]
-        )
+        filtered_heat = max_norm(gaussian_blur(heatmaps[i].unsqueeze(0), kernel_size=kernel_size)[0])
         vis_mask = filtered_heat > vis_th
 
         if rf:
             row1, row2, col1, col2 = get_crop_range(filtered_heat, crop_th)
-
             img_t = img[..., row1:row2, col1:col2]
             vis_mask_t = vis_mask[row1:row2, col1:col2]
 
             if img_t.sum() != 0 and vis_mask_t.sum() != 0:
-                # check whether img_t or vis_mask_t is not empty
                 img = img_t
                 vis_mask = vis_mask_t
 
         inv_mask = ~vis_mask
         img = img * vis_mask + img * inv_mask * alpha
-        img = zimage.imgify(img.detach().cpu())
-
-        imgs.append(img)
+        imgs.append(zimage.imgify(img.detach().cpu()))
 
     return imgs
 
 
 @torch.no_grad()
 def vis_img_heatmap(
-    data_batch,
-    heatmaps,
-    rf=False,
-    crop_th=0.1,
-    kernel_size=19,
-    cmap="bwr",
-    vmin=None,
-    vmax=None,
-    symmetric=True,
-) -> Tuple[Image.Image, Image.Image]:
-    """
-    Draws reference images and their conditional heatmaps. The function illustrates images using zennit.imgify and applies the supplied 'cmap' to heatmaps.
-    In addition, the reference images and heatmaps can be cropped where relevance is less than max(relevance)*crop_th by setting 'rf' to True.
+    data_batch: torch.Tensor,
+    heatmaps: torch.Tensor,
+    rf: bool = False,
+    crop_th: float = 0.1,
+    kernel_size: int = 19,
+    cmap: str = "bwr",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    symmetric: bool = True,
+) -> tuple[list[Image.Image], list[Image.Image]]:
+    """Render reference images alongside their conditional heatmaps.
 
-    Parameters:
+    Parameters
     ----------
-    data_batch: torch.Tensor
-        original images from dataset without FeatureVisualization.preprocess() applied to it
-    heatmaps: torch.Tensor
-        ouput heatmap tensor of the CondAttribution call
-    rf: boolean
-        Computes the CRP heatmap for a single neuron and hence restricts the heatmap to the receptive field.
-        The amount of cropping is further specified by the 'crop_th' argument.
-    crop_th: between [0 and 1)
-        Cropping Threshold: Crops the image in regions where relevance is smaller than max(relevance)*crop_th.
-        Cropping is only applied, if receptive field 'rf' is set to True.
-    kernel_size: scalar
-        Parameter of the torchvision.transforms.functional.gaussian_blur function used to smooth the CRP heatmap.
+    data_batch : torch.Tensor
+        Original images (before preprocessing).
+    heatmaps : torch.Tensor
+        Attribution heatmaps.
+    rf : bool
+        If ``True``, crop to the receptive field.
+    crop_th : float
+        Cropping threshold in ``[0, 1)``.
+    kernel_size : int
+        Gaussian blur kernel size.
+    cmap : str
+        Colormap for heatmaps.
+    vmin, vmax : float, optional
+        Value range for colormap normalization.
+    symmetric : bool
+        Whether to use symmetric color normalization.
 
-    REMAINING PARAMETERS: correspond to zennit.image.imgify
-
-    Returns:
-    --------
-    image: list of PIL.Image objects
-        If 'rf' is True, reference images have different shapes.
-
+    Returns
+    -------
+    tuple[list[Image.Image], list[Image.Image]]
+        ``(images, heatmap_images)``.
     """
-
     img_list, heat_list = [], []
 
     for i in range(len(data_batch)):
@@ -158,64 +161,64 @@ def vis_img_heatmap(
         heat = heatmaps[i]
 
         if rf:
-            filtered_heat = max_norm(
-                gaussian_blur(heat.unsqueeze(0), kernel_size=kernel_size)[0]
-            )
+            filtered_heat = max_norm(gaussian_blur(heat.unsqueeze(0), kernel_size=kernel_size)[0])
             row1, row2, col1, col2 = get_crop_range(filtered_heat, crop_th)
-
             img_t = img[..., row1:row2, col1:col2]
             heat_t = heat[row1:row2, col1:col2]
 
             if img_t.sum() != 0 and heat_t.sum() != 0:
-                # check whether img or vis_mask is not empty
                 img = img_t
                 heat = heat_t
 
-        heat = imgify(heat, cmap=cmap, vmin=vmin, vmax=vmax, symmetric=symmetric)
-        img = imgify(img)
-
-        img_list.append(img)
-        heat_list.append(heat)
+        heat_list.append(imgify(heat, cmap=cmap, vmin=vmin, vmax=vmax, symmetric=symmetric))
+        img_list.append(imgify(img))
 
     return img_list, heat_list
 
 
 def imgify(
-    image: Union[Image.Image, torch.Tensor, np.ndarray],
+    image: Image.Image | torch.Tensor | np.ndarray,
     cmap: str = "bwr",
-    vmin=None,
-    vmax=None,
-    symmetric=False,
-    level=1.0,
-    grid=False,
-    gridfill=None,
-    resize: int = None,
-    padding=False,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    symmetric: bool = False,
+    level: float = 1.0,
+    grid: bool = False,
+    gridfill: float | None = None,
+    resize: int | None = None,
+    padding: bool = False,
 ) -> Image.Image:
-    """
-    Convenient wrapper around zennit.image.imgify supporting tensors, numpy arrays and PIL Images. Allows resizing while keeping the aspect
-    ratio intact and padding to a square shape.
+    """Convert a tensor, array, or PIL Image to a displayable PIL Image.
 
-    Parameters:
+    Wrapper around :py:func:`zennit.image.imgify` with optional resizing
+    (preserving aspect ratio) and square padding.
+
+    Parameters
     ----------
-    image: torch.Tensor, np.ndarray or PIL Image
-        With 2 dimensions greyscale, or 3 dimensions with 1 or 3 values in the first or last dimension (color).
-    resize: None or int
-        If None, no resizing is applied. If int, sets the maximal aspect ratio of the image.
-    padding: boolean
-        If True, pads the image into a square shape by setting the alpha channel to zero outside the image.
-    vmin: float or obj:numpy.ndarray
-        Manual minimum value of the array. Overrides the used norm's minimum value.
-    vmax: float or obj:numpy.ndarray
-        Manual maximum value of the array. Overrides the used norm's maximum value.
-    cmap: str or ColorMap
-        String to specify a built-in color map, code used to create a new color map, or a ColorMap instance, which will be used to create a palette. The color map will only be applied for arrays with only a single color channel. The color will be specified as a palette in the PIL Image.
+    image : Image.Image, torch.Tensor, or np.ndarray
+        Input image.
+    cmap : str
+        Colormap for single-channel images.
+    vmin, vmax : float, optional
+        Value range for normalization.
+    symmetric : bool
+        Symmetric color normalization.
+    level : float
+        Colormap level.
+    grid : bool
+        Whether to add grid lines.
+    gridfill : float, optional
+        Grid fill value.
+    resize : int, optional
+        Maximum dimension for resizing.
+    padding : bool
+        If ``True``, pad to a square shape.
 
-    Returns:
-    --------
-    image: PIL.Image object
+    Returns
+    -------
+    Image.Image
+        Rendered image.
     """
-
     if isinstance(image, torch.Tensor):
         img = zimage.imgify(
             image.detach().cpu(),
@@ -241,117 +244,102 @@ def imgify(
     elif isinstance(image, Image.Image):
         img = image
     else:
-        raise TypeError(
-            "Only PIL.Image, torch.Tensor or np.ndarray types are supported!"
-        )
+        raise TypeError(f"Unsupported image type: {type(image)}")
 
     if resize:
         ratio = resize / max(img.size)
-        new_size = tuple([int(x * ratio) for x in img.size])
+        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
         img = img.resize(new_size, Image.NEAREST)
 
     if padding:
         max_size = resize if resize else max(img.size)
         new_im = Image.new("RGBA", (max_size, max_size))
         new_im.putalpha(0)
-        new_im.paste(
-            img, ((max_size - img.size[0]) // 2, (max_size - img.size[1]) // 2)
-        )
+        new_im.paste(img, ((max_size - img.size[0]) // 2, (max_size - img.size[1]) // 2))
         img = new_im
 
     return img
 
 
 def plot_grid(
-    ref_c: Dict[int, Any],
-    cmap_dim=1,
-    cmap="bwr",
-    vmin=None,
-    vmax=None,
-    symmetric=True,
-    resize=None,
-    padding=True,
-    figsize=(6, 6),
+    ref_c: dict[int, Any],
+    cmap_dim: int = 1,
+    cmap: str = "bwr",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    symmetric: bool = True,
+    resize: int | None = None,
+    padding: bool = True,
+    figsize: tuple[float, float] = (6, 6),
 ):
-    """
-    Plots dictionary of reference images as they are returned of the 'get_max_reference' method. To every element in the list crp.imgify is applied with its respective argument values.
+    """Plot a grid of reference images.
 
-    Parameters:
+    Parameters
     ----------
-    ref_c: dict with keys: integer and value: several lists filled with torch.Tensor, np.ndarray or PIL Image
-        To every element in the list crp.imgify is applied.
-    resize: None or int
-        If None, no resizing is applied. If int, sets the maximal aspect ratio of the image.
-    padding: boolean
-        If True, pads the image into a square shape by setting the alpha channel to zero outside the image.
-    figsize: tuple or None
-        Size of plt.figure
-    cmap_dim: int, 0 or 1
-        Applies the remaining parameters to the first or second element of the tuple list, i.e. plot as heatmap
-
-    REMAINING PARAMETERS: correspond to zennit.imgify
-
-    Returns:
-    --------
-    shows matplotlib.pyplot plot
+    ref_c : dict[int, Any]
+        Dictionary of reference images keyed by concept index.
+        Values can be lists of images or tuples of lists (e.g., from
+        :py:func:`vis_img_heatmap`).
+    cmap_dim : int
+        Which tuple element to apply the colormap to (1 or 2).
+    cmap : str
+        Colormap name.
+    vmin, vmax : float, optional
+        Value range.
+    symmetric : bool
+        Symmetric normalization.
+    resize : int, optional
+        Maximum dimension for resizing.
+    padding : bool
+        Pad images to squares.
+    figsize : tuple[float, float]
+        Figure size.
     """
-
     keys = list(ref_c.keys())
     nrows = len(keys)
     value = next(iter(ref_c.values()))
 
-    if cmap_dim > 2 or cmap_dim < 1 or cmap_dim == None:
-        raise ValueError("'cmap_dim' must be 0 or 1 or None.")
+    if cmap_dim not in (1, 2):
+        raise ValueError("'cmap_dim' must be 1 or 2.")
 
-    if isinstance(value, Tuple) and isinstance(value[0], Iterable):
+    if isinstance(value, tuple) and isinstance(value[0], Iterable):
         nsubrows = len(value)
         ncols = len(value[0])
-    elif isinstance(value, Iterable):
+    elif isinstance(value, list):
         nsubrows = 1
         ncols = len(value)
     else:
-        raise ValueError(
-            "'ref_c' dictionary must contain an iterable of torch.Tensor, np.ndarray or PIL Image or a tuple of thereof."
-        )
+        raise TypeError("Values must be lists or tuples of lists.")
 
     fig = plt.figure(figsize=figsize)
-    outer = gridspec.GridSpec(nrows, 1, wspace=0, hspace=0.2)
+    outer = gridspec.GridSpec(nrows, 1, wspace=0.025, hspace=0.025)
 
-    for i in range(nrows):
+    for row_idx, key in enumerate(keys):
         inner = gridspec.GridSpecFromSubplotSpec(
-            nsubrows, ncols, subplot_spec=outer[i], wspace=0, hspace=0.1
+            nsubrows,
+            ncols,
+            subplot_spec=outer[row_idx],
+            wspace=0.025,
+            hspace=0.025,
         )
+        imgs = ref_c[key]
 
         for sr in range(nsubrows):
-            if nsubrows > 1:
-                img_list = ref_c[keys[i]][sr]
-            else:
-                img_list = ref_c[keys[i]]
+            sub_imgs = imgs[sr] if nsubrows > 1 else imgs
+            for col in range(ncols):
+                ax = plt.Subplot(fig, inner[sr, col])
+                img = sub_imgs[col]
 
-            for c in range(ncols):
-                ax = plt.Subplot(fig, inner[sr, c])
-
-                if sr == cmap_dim:
+                if sr + 1 == cmap_dim:
                     img = imgify(
-                        img_list[c],
-                        cmap=cmap,
-                        vmin=vmin,
-                        vmax=vmax,
-                        symmetric=symmetric,
-                        resize=resize,
-                        padding=padding,
+                        img, cmap=cmap, vmin=vmin, vmax=vmax, symmetric=symmetric, resize=resize, padding=padding
                     )
                 else:
-                    img = imgify(img_list[c], resize=resize, padding=padding)
+                    img = imgify(img, resize=resize, padding=padding)
 
                 ax.imshow(img)
                 ax.set_xticks([])
                 ax.set_yticks([])
-
-                if sr == 0 and c == 0:
-                    ax.set_ylabel(keys[i])
-
                 fig.add_subplot(ax)
 
-    outer.tight_layout(fig)
-    fig.show()
+    plt.show()
