@@ -2,11 +2,11 @@
 
 ## Project overview
 
-The goal of this repo is to refactor zennit-crp (https://github.com/rachtibat/zennit-crp) to be more in line with the original architecture of zennit (https://github.com/chr5tphr/zennit). 
+The goal of this repo is to refactor zennit-crp (https://github.com/rachtibat/zennit-crp) to be more in line with the original architecture and API of zennit (https://github.com/chr5tphr/zennit). 
 
 ## Environment
 
-- The environment is managed by `uv`.
+- The environment is locally managed by `uv`.
 
 ## Coding guidelines
 
