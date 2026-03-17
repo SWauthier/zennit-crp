@@ -6,11 +6,8 @@ This module provides CRP-specific hooks that extend zennit's Hook base class.
 
 from __future__ import annotations
 
-import functools
-import weakref
-
 import torch
-from zennit.core import Hook, RemovableHandle, RemovableHandleList
+from zennit.core import Hook
 
 
 class MaskHook(Hook):
@@ -76,12 +73,16 @@ class MaskHook(Hook):
         return obj
 
 
-class RecordingHook:
-    """Forward hook that records layer outputs and their gradients.
+class RecordingHook(Hook):
+    """Hook that records layer outputs and their gradients.
 
-    Stores the output tensor during forward pass and calls
-    :py:meth:`torch.Tensor.retain_grad` so that the gradient (relevance)
-    is available after the backward pass.
+    Extends zennit's :py:class:`~zennit.core.Hook` to store the output tensor
+    during the forward pass and call :py:meth:`torch.Tensor.retain_grad` so
+    that the gradient (relevance) is available after the backward pass.
+
+    Uses Hook's standard registration (:py:meth:`~zennit.core.Hook.register`),
+    returning a :py:class:`~zennit.core.RemovableHandleList` and integrating
+    properly with composites.
 
     Attributes
     ----------
@@ -89,36 +90,34 @@ class RecordingHook:
         The detached activation recorded during the forward pass.
     relevance : torch.Tensor or None
         The detached gradient (relevance) available after backward.
-    output : torch.Tensor or None
-        The raw output tensor with grad_fn, usable for segmented backward.
     """
 
     def __init__(self):
+        super().__init__()
         self.activation: torch.Tensor | None = None
         self.relevance: torch.Tensor | None = None
-        self.output: torch.Tensor | None = None
-        self._handle: torch.utils.hooks.RemovableHandle | None = None
 
-    def _forward_hook(self, module, input, output):
-        """Store the output tensor and enable gradient retention."""
-        self.output = output
-        output.retain_grad()
+    @property
+    def output(self):
+        """The recorded output tensor, or ``None`` if not yet recorded."""
+        return self.stored_tensors.get("output")
 
-    def register(self, module: torch.nn.Module) -> torch.utils.hooks.RemovableHandle:
-        """Register the forward hook on a module.
+    def forward(self, module, args, kwargs, output):
+        """Store the output tensor and enable gradient retention.
 
         Parameters
         ----------
         module : torch.nn.Module
-            The module on which to register this hook.
-
-        Returns
-        -------
-        torch.utils.hooks.RemovableHandle
-            Handle for removing the hook later.
+            The module to which this hook is attached.
+        args : tuple[torch.Tensor]
+            The input tensors passed to ``module.forward``.
+        kwargs : dict
+            The keyword arguments passed to ``module.forward``.
+        output : torch.Tensor
+            The output tensor.
         """
-        self._handle = module.register_forward_hook(self._forward_hook)
-        return self._handle
+        self.stored_tensors["output"] = output
+        output.retain_grad()
 
     def collect(self, on_device: str | torch.device | None = None, length: int | None = None):
         """Collect the recorded activation and relevance.
@@ -132,18 +131,19 @@ class RecordingHook:
         length : int, optional
             Truncate tensors to this length along the batch dimension.
         """
-        if self.output is None:
+        output = self.output
+        if output is None:
             return
 
         # Activation: detached copy of the forward output
-        act = self.output.detach()[:length]
+        act = output.detach()[:length]
         self.activation = act.to(on_device) if on_device else act
 
         # Relevance: gradient at this layer (populated by retain_grad)
-        if self.output.grad is not None:
-            rel = self.output.grad.detach()[:length]
+        if output.grad is not None:
+            rel = output.grad.detach()[:length]
             self.relevance = rel.to(on_device) if on_device else rel
-            self.output.grad = None
+            output.grad = None
         else:
             self.relevance = torch.zeros_like(self.activation)
 
@@ -151,22 +151,35 @@ class RecordingHook:
         """Clear stored tensors for reuse across batches."""
         self.activation = None
         self.relevance = None
-        self.output = None
+        self.stored_tensors.pop("output", None)
+
+    def copy(self):
+        """Return a copy of this hook.
+
+        Returns
+        -------
+        RecordingHook
+            A fresh recording hook.
+        """
+        return RecordingHook()
 
     def remove(self):
-        """Remove the registered hook and clear stored tensors."""
-        if self._handle is not None:
-            self._handle.remove()
-            self._handle = None
+        """Remove the registered hooks and clear stored tensors."""
         self.reset()
+        super().remove()
 
 
-class FeatVisHook:
+class FeatVisHook(Hook):
     """Hook for reference sampling during feature visualization.
 
-    Records activations and relevances at a specific layer and passes
-    them to a :py:class:`~zennit_crp.visualization.FeatureVisualization`
-    instance for analysis.
+    Extends zennit's :py:class:`~zennit.core.Hook` to record activations
+    during the forward pass and analyze relevances during the backward pass,
+    passing both to a :py:class:`~zennit_crp.visualization.FeatureVisualization`
+    instance.
+
+    Uses Hook's :py:meth:`~zennit.core.Hook.forward` for activation recording
+    and :py:meth:`~zennit.core.Hook.pre_backward` for relevance analysis,
+    replacing the manual tensor-level hook that was previously required.
 
     Parameters
     ----------
@@ -184,28 +197,26 @@ class FeatVisHook:
     """
 
     def __init__(self, fv, concept, layer_name: str, context: dict, on_device=None):
+        super().__init__()
         self.fv = fv
         self.concept = concept
         self.layer_name = layer_name
         self.context = context
         self.on_device = on_device
 
-    def post_forward(self, module, input, output):
-        """Record activations after forward pass and register backward callback.
+    def forward(self, module, args, kwargs, output):
+        """Record activations after the forward pass.
 
         Parameters
         ----------
         module : torch.nn.Module
             The module to which this hook is attached.
-        input : tuple[torch.Tensor]
+        args : tuple[torch.Tensor]
             The input tensors.
+        kwargs : dict
+            The keyword arguments.
         output : torch.Tensor
             The output tensor.
-
-        Returns
-        -------
-        torch.Tensor
-            The unmodified output tensor.
         """
         sample_indices = self.context["sample_indices"]
         targets = self.context["targets"]
@@ -216,35 +227,28 @@ class FeatVisHook:
 
         self.fv.analyze_activation(activation, self.layer_name, self.concept, sample_indices, targets)
 
-        # Register a tensor-level backward hook for relevance
-        hook_ref = weakref.ref(self)
+    def pre_backward(self, module, grad_input, grad_output):
+        """Analyze relevance during the backward pass.
 
-        @functools.wraps(self._backward)
-        def wrapper(grad):
-            hook = hook_ref()
-            if hook is not None:
-                return hook._backward(module, grad)
-            return grad
+        Parameters
+        ----------
+        module : torch.nn.Module
+            The module to which this hook is attached.
+        grad_input : tuple[torch.Tensor]
+            The input gradient tensors.
+        grad_output : tuple[torch.Tensor]
+            The output gradient tensors.
+        """
+        super().pre_backward(module, grad_input, grad_output)
 
-        if not isinstance(output, tuple):
-            output = (output,)
-
-        if output[0].grad_fn is not None:
-            output[0].register_hook(wrapper)
-
-        return output[0] if len(output) == 1 else output
-
-    def _backward(self, module, grad):
-        """Analyze relevance during backward pass."""
         sample_indices = self.context["sample_indices"]
         targets = self.context["targets"]
 
-        relevance = grad.detach()
+        relevance = grad_output[0].detach()
         if self.on_device:
             relevance = relevance.to(self.on_device)
 
         self.fv.analyze_relevance(relevance, self.layer_name, self.concept, sample_indices, targets)
-        return grad
 
     def copy(self):
         """Return a copy of this hook sharing the same feature visualization instance.
@@ -255,26 +259,3 @@ class FeatVisHook:
             A copy of this hook.
         """
         return FeatVisHook(self.fv, self.concept, self.layer_name, self.context, self.on_device)
-
-    def remove(self):
-        """No-op: cleanup is handled by the handle list."""
-
-    def register(self, module: torch.nn.Module) -> RemovableHandleList:
-        """Register the forward hook on a module.
-
-        Parameters
-        ----------
-        module : torch.nn.Module
-            The module on which to register.
-
-        Returns
-        -------
-        RemovableHandleList
-            Handle list for removing the hook later.
-        """
-        return RemovableHandleList(
-            [
-                RemovableHandle(self),
-                module.register_forward_hook(self.post_forward),
-            ]
-        )

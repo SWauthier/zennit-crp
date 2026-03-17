@@ -156,3 +156,50 @@ def test_mask_hook():
     result = hook.pre_backward(None, None, (grad,))
     assert result[0][:, 0].sum() == 2.0
     assert result[0][:, 1:].sum() == 0.0
+
+
+def test_recording_hook_inherits_hook():
+    """Test RecordingHook is a proper zennit Hook subclass."""
+    from zennit.core import Hook, RemovableHandleList
+
+    from zennit_crp.hooks import RecordingHook
+
+    hook = RecordingHook()
+    assert isinstance(hook, Hook)
+    assert hasattr(hook, "stored_tensors")
+    assert hasattr(hook, "active")
+    assert hasattr(hook, "tensor_handles")
+
+    # register() returns RemovableHandleList (zennit's convention)
+    model = nn.Linear(2, 2)
+    handles = hook.register(model)
+    assert isinstance(handles, RemovableHandleList)
+
+    # forward recording works
+    inp = torch.randn(1, 2, requires_grad=True)
+    out = model(inp)
+    assert hook.output is not None
+    assert torch.allclose(out, hook.output)
+
+    handles.remove()
+
+
+def test_auto_registration(simple_model):
+    """Test ConditionalGradient auto-registers composite without context manager."""
+    inp = torch.tensor([[-1.0, 1.0]], requires_grad=True)
+    conditions = [{"y": [0]}]
+    composite = EpsilonPlus()
+
+    # Call without `with` block — composite should be auto-registered and removed
+    attributor = ConditionalGradient(simple_model, composite=composite)
+    attr = attributor(
+        inp,
+        conditions,
+        record_layers=["layer1", "layer2", "layer3"],
+        init_rel=torch.eye(1, dtype=torch.float32)[[0]],
+        heatmap_fn=lambda g: g.squeeze(0),
+    )
+
+    assert torch.allclose(attr.heatmap, torch.tensor([-1.1, 2.1]))
+    # Composite should be removed after the call
+    assert not composite.handles

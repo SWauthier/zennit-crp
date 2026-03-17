@@ -248,9 +248,26 @@ class ConditionalGradient(Gradient):
         if heatmap_fn is None:
             heatmap_fn = _default_heatmap_fn
 
-        # Partition conditions for exclude_parallel handling
-        if exclude_parallel:
-            return self._partitioned_call(
+        # Auto-register composite if not already active (mirrors Attributor.__call__)
+        auto_register = self.composite is not None and not self.composite.handles
+        if auto_register:
+            self.composite.register(self.model)
+
+        try:
+            # Partition conditions for exclude_parallel handling
+            if exclude_parallel:
+                return self._partitioned_call(
+                    input,
+                    conditions,
+                    record_layers=record_layers,
+                    mask_fn=mask_fn,
+                    init_rel=init_rel,
+                    start_layer=start_layer,
+                    on_device=on_device,
+                    heatmap_fn=heatmap_fn,
+                )
+
+            return self._attribute(
                 input,
                 conditions,
                 record_layers=record_layers,
@@ -258,20 +275,12 @@ class ConditionalGradient(Gradient):
                 init_rel=init_rel,
                 start_layer=start_layer,
                 on_device=on_device,
+                exclude_parallel=False,
                 heatmap_fn=heatmap_fn,
             )
-
-        return self._attribute(
-            input,
-            conditions,
-            record_layers=record_layers,
-            mask_fn=mask_fn,
-            init_rel=init_rel,
-            start_layer=start_layer,
-            on_device=on_device,
-            exclude_parallel=False,
-            heatmap_fn=heatmap_fn,
-        )
+        finally:
+            if auto_register:
+                self.composite.remove()
 
     def _partitioned_call(
         self,
@@ -548,145 +557,154 @@ class ConditionalGradient(Gradient):
         if heatmap_fn is None:
             heatmap_fn = _default_heatmap_fn
 
-        # Collect all conditioned layer names across all conditions
-        all_cond_names = conditioned_layer_names(conditions)
+        # Auto-register composite if not already active (mirrors Attributor.__call__)
+        auto_register = self.composite is not None and not self.composite.handles
+        if auto_register:
+            self.composite.register(self.model)
 
-        # Determine layers to record
-        layers_to_record = set(record_layers) | set(all_cond_names)
-        if start_layer:
-            layers_to_record.add(start_layer)
+        try:
+            # Collect all conditioned layer names across all conditions
+            all_cond_names = conditioned_layer_names(conditions)
 
-        # Register empty mask hooks for all conditioned layers
-        hook_map: dict[str, MaskHook] = {}
-        for name in all_cond_names:
-            hook_map[name] = MaskHook([])
-
-        # Register recording hooks
-        recording_hooks: dict[str, RecordingHook] = {}
-        rec_handles = RemovableHandleList()
-        for name, module in self.model.named_modules():
-            if name in layers_to_record:
-                rec_hook = RecordingHook()
-                recording_hooks[name] = rec_hook
-                rec_handles.append(rec_hook.register(module))
-
-        # Build the mask composite from pre-allocated empty hooks
-        from zennit.composites import NameMapComposite
-
-        name_map = [([name], hook) for name, hook in hook_map.items()]
-        mask_composite = NameMapComposite(name_map)
-
-        # Calculate batching
-        n_conditions = len(conditions)
-        n_batches = max(1, math.ceil(n_conditions / batch_size))
-        actual_batch_size = min(batch_size, n_conditions)
-
-        # Broadcast input to batch size
-        data_batch = torch.repeat_interleave(input, actual_batch_size, dim=0)
-        data_batch = data_batch.detach().requires_grad_(True)
-        data_batch.retain_grad()
-
-        seg_names = [n for n in all_cond_names if n != start_layer] if start_layer else all_cond_names
-
-        with mask_composite.context(self.model):
-            # Single forward pass
+            # Determine layers to record
+            layers_to_record = set(record_layers) | set(all_cond_names)
             if start_layer:
-                self.model(data_batch)
-                prediction = recording_hooks[start_layer].output
-            else:
-                prediction = self.model(data_batch)
+                layers_to_record.add(start_layer)
 
-            progress = tqdm(total=n_batches, dynamic_ncols=True) if verbose else None
+            # Register empty mask hooks for all conditioned layers
+            hook_map: dict[str, MaskHook] = {}
+            for name in all_cond_names:
+                hook_map[name] = MaskHook([])
 
-            for b in range(n_batches):
-                if progress:
-                    progress.update(1)
+            # Register recording hooks
+            recording_hooks: dict[str, RecordingHook] = {}
+            rec_handles = RemovableHandleList()
+            for name, module in self.model.named_modules():
+                if name in layers_to_record:
+                    rec_hook = RecordingHook()
+                    recording_hooks[name] = rec_hook
+                    rec_handles.append(rec_hook.register(module))
 
-                cond_batch = conditions[b * actual_batch_size : (b + 1) * actual_batch_size]
-                is_last = b == n_batches - 1
-                current_batch_size = len(cond_batch)
+            # Build the mask composite from pre-allocated empty hooks
+            from zennit.composites import NameMapComposite
 
-                # Build masks for this batch
-                y_targets: list[list[int] | None] = []
-                for i, cond in enumerate(cond_batch):
-                    for l_name, indices in cond.items():
-                        if l_name == MODEL_OUTPUT_NAME:
-                            y_targets.append(indices)
-                        elif l_name in hook_map:
-                            mask_func = MaskComposite._resolve_mask_fn(mask_fn, l_name)
-                            hook_map[l_name].masks.append(mask_func(i, indices))
+            name_map = [([name], hook) for name, hook in hook_map.items()]
+            mask_composite = NameMapComposite(name_map)
 
-                # Pad y_targets for consistency
-                while len(y_targets) < current_batch_size:
-                    y_targets.append(None)
+            # Calculate batching
+            n_conditions = len(conditions)
+            n_batches = max(1, math.ceil(n_conditions / batch_size))
+            actual_batch_size = min(batch_size, n_conditions)
 
-                # Initialize relevance
-                relevance_init = _init_relevance(
-                    prediction.detach().clone(),
-                    y_targets,
-                    init_rel,
-                )
+            # Broadcast input to batch size
+            data_batch = torch.repeat_interleave(input, actual_batch_size, dim=0)
+            data_batch = data_batch.detach().requires_grad_(True)
+            data_batch.retain_grad()
 
-                # Backward pass (retain graph unless last batch)
-                retain = not is_last
-                if exclude_parallel and seg_names:
-                    current_out, current_grad = prediction, relevance_init
-                    for name in seg_names:
-                        intermediate = recording_hooks[name].output
+            seg_names = [n for n in all_cond_names if n != start_layer] if start_layer else all_cond_names
+
+            with mask_composite.context(self.model):
+                # Single forward pass
+                if start_layer:
+                    self.model(data_batch)
+                    prediction = recording_hooks[start_layer].output
+                else:
+                    prediction = self.model(data_batch)
+
+                progress = tqdm(total=n_batches, dynamic_ncols=True) if verbose else None
+
+                for b in range(n_batches):
+                    if progress:
+                        progress.update(1)
+
+                    cond_batch = conditions[b * actual_batch_size : (b + 1) * actual_batch_size]
+                    is_last = b == n_batches - 1
+                    current_batch_size = len(cond_batch)
+
+                    # Build masks for this batch
+                    y_targets: list[list[int] | None] = []
+                    for i, cond in enumerate(cond_batch):
+                        for l_name, indices in cond.items():
+                            if l_name == MODEL_OUTPUT_NAME:
+                                y_targets.append(indices)
+                            elif l_name in hook_map:
+                                mask_func = MaskComposite._resolve_mask_fn(mask_fn, l_name)
+                                hook_map[l_name].masks.append(mask_func(i, indices))
+
+                    # Pad y_targets for consistency
+                    while len(y_targets) < current_batch_size:
+                        y_targets.append(None)
+
+                    # Initialize relevance
+                    relevance_init = _init_relevance(
+                        prediction.detach().clone(),
+                        y_targets,
+                        init_rel,
+                    )
+
+                    # Backward pass (retain graph unless last batch)
+                    retain = not is_last
+                    if exclude_parallel and seg_names:
+                        current_out, current_grad = prediction, relevance_init
+                        for name in seg_names:
+                            intermediate = recording_hooks[name].output
+                            (gradient,) = torch.autograd.grad(
+                                (current_out,),
+                                (intermediate,),
+                                grad_outputs=(current_grad,),
+                                retain_graph=True,
+                                create_graph=self.create_graph,
+                            )
+                            intermediate.grad = None
+                            current_out, current_grad = intermediate, gradient
+
                         (gradient,) = torch.autograd.grad(
                             (current_out,),
-                            (intermediate,),
+                            (data_batch,),
                             grad_outputs=(current_grad,),
-                            retain_graph=True,
+                            retain_graph=retain,
                             create_graph=self.create_graph,
                         )
-                        intermediate.grad = None
-                        current_out, current_grad = intermediate, gradient
+                        data_batch.grad = gradient
+                    else:
+                        torch.autograd.backward(
+                            prediction,
+                            relevance_init.to(prediction),
+                            retain_graph=retain,
+                        )
 
-                    (gradient,) = torch.autograd.grad(
-                        (current_out,),
-                        (data_batch,),
-                        grad_outputs=(current_grad,),
-                        retain_graph=retain,
-                        create_graph=self.create_graph,
+                    # Collect results
+                    heatmap = heatmap_fn(data_batch.grad.detach()[:current_batch_size])
+                    if on_device:
+                        heatmap = heatmap.to(on_device)
+
+                    activations: dict[str, torch.Tensor] = {}
+                    relevances_dict: dict[str, torch.Tensor] = {}
+                    for name, hook in recording_hooks.items():
+                        hook.collect(on_device=on_device, length=current_batch_size)
+                        if name in record_layers:
+                            activations[name] = hook.activation
+                            relevances_dict[name] = hook.relevance
+
+                    yield AttributionResult(
+                        heatmap=heatmap,
+                        activations=activations,
+                        relevances=relevances_dict,
+                        prediction=prediction[:current_batch_size],
                     )
-                    data_batch.grad = gradient
-                else:
-                    torch.autograd.backward(
-                        prediction,
-                        relevance_init.to(prediction),
-                        retain_graph=retain,
-                    )
 
-                # Collect results
-                heatmap = heatmap_fn(data_batch.grad.detach()[:current_batch_size])
-                if on_device:
-                    heatmap = heatmap.to(on_device)
+                    # Reset for next batch
+                    self._reset_gradients(data_batch)
+                    for hook in hook_map.values():
+                        hook.masks.clear()
 
-                activations: dict[str, torch.Tensor] = {}
-                relevances_dict: dict[str, torch.Tensor] = {}
-                for name, hook in recording_hooks.items():
-                    hook.collect(on_device=on_device, length=current_batch_size)
-                    if name in record_layers:
-                        activations[name] = hook.activation
-                        relevances_dict[name] = hook.relevance
+                if progress:
+                    progress.close()
 
-                yield AttributionResult(
-                    heatmap=heatmap,
-                    activations=activations,
-                    relevances=relevances_dict,
-                    prediction=prediction[:current_batch_size],
-                )
-
-                # Reset for next batch
-                self._reset_gradients(data_batch)
-                for hook in hook_map.values():
-                    hook.masks.clear()
-
-            if progress:
-                progress.close()
-
-        rec_handles.remove()
+            rec_handles.remove()
+        finally:
+            if auto_register:
+                self.composite.remove()
 
     def _reset_gradients(self, data: torch.Tensor):
         """Clear gradients on model parameters and input data."""
