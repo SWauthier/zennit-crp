@@ -12,6 +12,48 @@ import numpy as np
 import torch
 
 
+def find_files(path: str | Path | None = None) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+    """Search for analysis result folders in the given directory.
+
+    Scans ``path`` for directories whose names contain ``RelMax``,
+    ``ActMax``, ``RelStats``, ``ActStats``, or ``ReField`` and returns
+    their full paths grouped by category.
+
+    Parameters
+    ----------
+    path : str, Path, or None
+        Directory to scan. Defaults to the current working directory.
+
+    Returns
+    -------
+    tuple[list[str], list[str], list[str], list[str], list[str]]
+        ``(rel_max, act_max, rel_stats, act_stats, receptive_field)`` paths.
+    """
+    folder = Path(path) if path is not None else Path.cwd()
+
+    r_max: list[str] = []
+    a_max: list[str] = []
+    r_stats: list[str] = []
+    a_stats: list[str] = []
+    rf: list[str] = []
+
+    for entry in sorted(folder.iterdir()):
+        name = entry.name
+        found_path = str(entry)
+        if "RelMax" in name:
+            r_max.append(found_path)
+        elif "ActMax" in name:
+            a_max.append(found_path)
+        elif "RelStats" in name:
+            r_stats.append(found_path)
+        elif "ActStats" in name:
+            a_stats.append(found_path)
+        elif "ReField" in name:
+            rf.append(found_path)
+
+    return r_max, a_max, r_stats, a_stats, rf
+
+
 def get_layer_names(model: torch.nn.Module, types: list[type]) -> list[str]:
     """Retrieve names of all layers matching the given types.
 

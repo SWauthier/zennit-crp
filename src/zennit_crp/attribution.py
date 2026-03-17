@@ -747,6 +747,17 @@ class AttributionGraph:
         self.layer_map = layer_map
         self.mask_map: dict[str, Callable] = {l_name: concept.mask for l_name, concept in layer_map.items()}
 
+    def set_layer_map(self, layer_map: dict[str, ChannelConcept]):
+        """Replace the layer map and rebuild the mask map.
+
+        Parameters
+        ----------
+        layer_map : dict[str, ChannelConcept]
+            New mapping from layer names to concept instances.
+        """
+        self.layer_map = layer_map
+        self.mask_map = {l_name: concept.mask for l_name, concept in layer_map.items()}
+
     def __call__(
         self,
         sample: torch.Tensor,

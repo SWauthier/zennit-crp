@@ -312,15 +312,15 @@ def plot_grid(
         raise TypeError("Values must be lists or tuples of lists.")
 
     fig = plt.figure(figsize=figsize)
-    outer = gridspec.GridSpec(nrows, 1, wspace=0.025, hspace=0.025)
+    outer = gridspec.GridSpec(nrows, 1, wspace=0, hspace=0.2)
 
     for row_idx, key in enumerate(keys):
         inner = gridspec.GridSpecFromSubplotSpec(
             nsubrows,
             ncols,
             subplot_spec=outer[row_idx],
-            wspace=0.025,
-            hspace=0.025,
+            wspace=0,
+            hspace=0.1,
         )
         imgs = ref_c[key]
 
@@ -340,6 +340,11 @@ def plot_grid(
                 ax.imshow(img)
                 ax.set_xticks([])
                 ax.set_yticks([])
+
+                if sr == 0 and col == 0:
+                    ax.set_ylabel(key)
+
                 fig.add_subplot(ax)
 
+    outer.tight_layout(fig)
     plt.show()

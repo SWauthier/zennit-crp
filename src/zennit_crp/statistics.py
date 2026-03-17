@@ -173,5 +173,11 @@ class Statistics:
             self._concatenate(l_name, target, d_c, rel_c, rf_c)
             self._sort(l_name, target)
 
+        # Clean up checkpoint files
+        for path in path_list:
+            for suffix in ("data.npy", "rf.npy", "rel.npy"):
+                checkpoint_file = Path(path + suffix)
+                checkpoint_file.unlink(missing_ok=True)
+
         pbar.close()
         return self._save_results(d_index)

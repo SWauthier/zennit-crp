@@ -203,3 +203,77 @@ def test_auto_registration(simple_model):
     assert torch.allclose(attr.heatmap, torch.tensor([-1.1, 2.1]))
     # Composite should be removed after the call
     assert not composite.handles
+
+
+def test_find_files(tmp_path):
+    """Test find_files discovers analysis result directories."""
+    from zennit_crp.helper import find_files
+
+    # Create mock result directories
+    (tmp_path / "RelMax_sum_normed").mkdir()
+    (tmp_path / "ActMax_sum_normed").mkdir()
+    (tmp_path / "RelStats_sum_normed").mkdir()
+    (tmp_path / "ActStats_sum_normed").mkdir()
+    (tmp_path / "ReField").mkdir()
+    (tmp_path / "unrelated").mkdir()
+
+    r_max, a_max, r_stats, a_stats, rf = find_files(tmp_path)
+    assert len(r_max) == 1 and "RelMax" in r_max[0]
+    assert len(a_max) == 1 and "ActMax" in a_max[0]
+    assert len(r_stats) == 1 and "RelStats" in r_stats[0]
+    assert len(a_stats) == 1 and "ActStats" in a_stats[0]
+    assert len(rf) == 1 and "ReField" in rf[0]
+
+
+def test_dump_pytorch_graph(capsys):
+    """Test dump_pytorch_graph prints graph nodes."""
+    from zennit_crp.graph import dump_pytorch_graph
+
+    model = nn.Linear(2, 2)
+    traced = torch.jit.trace(model, torch.randn(1, 2))
+    dump_pytorch_graph(traced.inlined_graph)
+
+    captured = capsys.readouterr()
+    assert "kind" in captured.out
+    assert "scopeName" in captured.out
+
+
+def test_channel_concept_get_rf_indices():
+    """Test ChannelConcept.get_rf_indices for conv and linear layers."""
+    from zennit_crp.concepts import ChannelConcept
+
+    # Linear layer output shape (1-D)
+    assert ChannelConcept.get_rf_indices(torch.Size([64])) == [0]
+
+    # Conv layer output shape (C, H, W)
+    rf = ChannelConcept.get_rf_indices(torch.Size([16, 4, 4]))
+    assert len(rf) == 16  # 4 * 4
+    assert rf[0] == 0
+    assert rf[-1] == 15
+
+
+def test_attribution_graph_set_layer_map(simple_model):
+    """Test AttributionGraph.set_layer_map rebuilds mask_map."""
+    from zennit_crp.attribution import AttributionGraph
+    from zennit_crp.concepts import ChannelConcept
+
+    layer_map = {"layer1": ChannelConcept()}
+    ag = AttributionGraph(
+        ConditionalGradient(simple_model),
+        graph=None,
+        layer_map=layer_map,
+    )
+    assert "layer1" in ag.mask_map
+
+    new_layer_map = {"layer2": ChannelConcept()}
+    ag.set_layer_map(new_layer_map)
+    assert "layer2" in ag.mask_map
+    assert "layer1" not in ag.mask_map
+
+
+def test_all_exports():
+    """Test all public names are accessible from the top-level package."""
+    import zennit_crp
+
+    for name in zennit_crp.__all__:
+        assert hasattr(zennit_crp, name), f"{name} not accessible from zennit_crp"

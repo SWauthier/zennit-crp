@@ -123,6 +123,34 @@ class ModelGraph:
         return "\n".join(lines)
 
 
+def dump_pytorch_graph(graph) -> None:
+    """Print all nodes in a PyTorch JIT graph for debugging.
+
+    Useful for inspecting the traced computational graph when building
+    a :py:class:`ModelGraph`.
+
+    Parameters
+    ----------
+    graph : torch._C.Graph
+        A JIT inlined graph (e.g. from ``torch.jit.trace(model, x).inlined_graph``).
+
+    Source
+    ------
+    Adapted from `hiddenlayer <https://github.com/waleedka/hiddenlayer>`_.
+    """
+    fmt = "{:25} {:40}   {} -> {}"
+    print(fmt.format("kind", "scopeName", "inputs", "outputs"))
+    for node in graph.nodes():
+        print(
+            fmt.format(
+                node.kind(),
+                node.scopeName(),
+                [i.unique() for i in node.inputs()],
+                [i.unique() for i in node.outputs()],
+            )
+        )
+
+
 def trace_model_graph(
     model: torch.nn.Module,
     sample: torch.Tensor,

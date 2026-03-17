@@ -6,8 +6,10 @@ The default implementation treats each channel as a separate concept.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
+import numpy as np
 import torch
 
 
@@ -21,7 +23,7 @@ class Concept(Protocol):
     """
 
     @staticmethod
-    def mask(batch_id: int, concept_ids: list[int]) -> callable:
+    def mask(batch_id: int, concept_ids: list[int]) -> Callable:
         """Create a gradient mask function for the given concepts.
 
         Parameters
@@ -85,7 +87,7 @@ class ChannelConcept:
     """
 
     @staticmethod
-    def mask(batch_id: int, concept_ids: list[int]) -> callable:
+    def mask(batch_id: int, concept_ids: list[int]) -> Callable:
         """Create a gradient mask that zeros out all but the specified channels.
 
         Parameters
@@ -111,7 +113,7 @@ class ChannelConcept:
         return mask_fn
 
     @staticmethod
-    def mask_rf(batch_id: int, channel_neuron_map: dict[int, list[int]]) -> callable:
+    def mask_rf(batch_id: int, channel_neuron_map: dict[int, list[int]]) -> Callable:
         """Create a gradient mask for specific neurons within channels (receptive field).
 
         Parameters
@@ -173,6 +175,28 @@ class ChannelConcept:
             rel_c = rel_c / (torch.abs(rel_c).sum(-1, keepdim=True) + 1e-10)
 
         return rel_c
+
+    @staticmethod
+    def get_rf_indices(output_shape: torch.Size) -> list[int] | np.ndarray:
+        """Return receptive field neuron indices for a given output shape.
+
+        For linear layers (1-D output), returns ``[0]``.  For convolutional
+        layers, returns all spatial indices ``[0, ..., H*W - 1]``.
+
+        Parameters
+        ----------
+        output_shape : torch.Size
+            Shape of the layer output *excluding* the batch dimension,
+            e.g. ``(C, H, W)``.
+
+        Returns
+        -------
+        list[int] or np.ndarray
+            Receptive field neuron indices.
+        """
+        if len(output_shape) == 1:
+            return [0]
+        return np.arange(0, int(np.prod(output_shape[1:])))
 
     @staticmethod
     def reference_sampling(
